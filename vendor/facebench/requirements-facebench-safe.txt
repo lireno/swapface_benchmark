@@ -1,0 +1,17 @@
+numpy
+pillow
+tqdm
+opencv-python
+decord
+tyro
+ray
+torchmetrics
+insightface
+onnxruntime
+dlib
+scipy
+scikit-image
+kornia
+trimesh
+nvdiffrast
+git+https://github.com/edavalosanaya/L2CS-Net.git@main

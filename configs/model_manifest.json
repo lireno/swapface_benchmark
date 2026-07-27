@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "path": "models/identity/antelope/scrfd_10g_bnkps.onnx",
+      "description": "SCRFD face detector",
+      "size": 16923827,
+      "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91"
+    },
+    {
+      "path": "models/identity/antelope/glintr100.onnx",
+      "description": "InsightFace GLIntr100 identity encoder",
+      "size": 260665334,
+      "sha256": "4ab1d6435d639628a6f3e5008dd4f929edf4c4124b1a7169e1048f9fef534cdf"
+    },
+    {
+      "path": "models/identity/arcface_w600k_r50.onnx",
+      "description": "ArcFace W600K-R50 identity encoder",
+      "size": 174383860,
+      "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43"
+    },
+    {
+      "path": "models/identity/curricularface_ir101.onnx",
+      "description": "CurricularFace IR101 identity encoder",
+      "size": 260668565,
+      "sha256": "344eb5dbfec458913772cab623f90f04dee1101a4247c6d2aa92703c13a2a452"
+    },
+    {
+      "path": "models/facebench/cosface_ACC99.28.pth",
+      "description": "CosFace checkpoint used by FaceBench",
+      "size": 90675486,
+      "sha256": "0761e899de3d5dca03b1d4d202bc4ab8e3b90862dc13155faf72a5febdd3df5e"
+    },
+    {
+      "path": "models/facebench/hopenet_robust_alpha1.pkl",
+      "description": "Hopenet head-pose checkpoint",
+      "size": 95924799,
+      "sha256": "1e0c6ddfda0e19a679607480c10875020de29b3984f187ec311c5e0802b6b6d5"
+    },
+    {
+      "path": "models/facebench/L2CSNet_gaze360.pkl",
+      "description": "L2CS-Net gaze checkpoint",
+      "size": 95849977,
+      "sha256": "8a7f3480d868dd48261e1d59f915b0ef0bb33ea12ea00938fb2168f212080665"
+    },
+    {
+      "path": "models/facebench/deep3d/checkpoints/pretrained/epoch_20.pth",
+      "description": "Deep3DFaceRecon expression and lighting checkpoint",
+      "size": 288860037,
+      "sha256": "6d17a6b23457b521801baae583cb6a58f7238fe6721fc3d65d76407460e9149b"
+    },
+    {
+      "path": "models/facebench/deep3d/checkpoints/dlib_predictor_recognition/shape_predictor_5_face_landmarks.dat",
+      "description": "Dlib five-landmark predictor used by Deep3DFaceRecon",
+      "size": 9150489,
+      "sha256": "c4b1e9804792707d3a405c2c16a80a20269e6675021f64a41d30fffafbc41888"
+    },
+    {
+      "path": "models/facebench/deep3d/BFM/BFM_model_front.mat",
+      "description": "Prepared Basel Face Model used by Deep3DFaceRecon",
+      "size": 127170280,
+      "sha256": "5fdc625d7e18c4710862614feb78f59d1177a96f6436adf766afc4ba30cce3e9"
+    },
+    {
+      "path": "models/facebench/deep3d/BFM/similarity_Lm3D_all.mat",
+      "description": "Deep3DFaceRecon standard 3D landmarks",
+      "size": 994,
+      "sha256": "53b83ce6e35c50ddc3e97603650cef4970320c157e75c241c844f29c1dcba65a"
+    },
+    {
+      "path": "models/vbench/musiq_spaq_ckpt-358bb6af.pth",
+      "description": "MUSIQ-SPAQ checkpoint used by VBench Imaging Quality",
+      "size": 108610983,
+      "sha256": "358bb6af275e28ea56821d44fb55c6cb83645db11f394d3ad65b2d149965ab50"
+    }
+  ]
+}
