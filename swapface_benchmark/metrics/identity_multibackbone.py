@@ -23,9 +23,10 @@ from swapface_benchmark.metrics.identity_strict import (
     frame_count,
     load_face_boxes,
     read_frames,
-    resize_frame_index,
     resolve_face_boxes_path,
     sample_eval_indices,
+    time_aligned_index,
+    video_fps,
 )
 
 
@@ -141,11 +142,19 @@ def prepare_generated_frames(
     generated_count = frame_count(generated_path)
     input_count = frame_count(input_video_path)
     input_shape = video_shape(input_video_path)
-    eval_count = min(generated_count, max_eval_frames)
-    eval_indices = sample_eval_indices(eval_count, sample_frames, random_sampling=False, seed=seed)
-    input_indices = [resize_frame_index(index, input_count, eval_count) for index in eval_indices]
+    eval_count = generated_count
+    sample_limit = min(sample_frames, max_eval_frames) if max_eval_frames > 0 else sample_frames
+    eval_indices = sample_eval_indices(eval_count, sample_limit, random_sampling=False, seed=seed)
+    generated_fps = video_fps(generated_path)
+    input_fps = video_fps(input_video_path)
+    input_indices = [time_aligned_index(index, generated_fps, input_fps, input_count) for index in eval_indices]
     face_boxes_path = resolve_face_boxes_path(item, input_video_path, mask_path)
     face_boxes = load_face_boxes(face_boxes_path)
+    if not face_boxes or max(input_indices, default=-1) >= len(face_boxes):
+        raise RuntimeError(
+            f"face boxes are shorter than generated timeline: need index {max(input_indices, default=-1)}, "
+            f"available={len(face_boxes)}"
+        )
     frames = read_frames(generated_path, eval_indices)
     cropped = []
     for frame, input_index in zip(frames, input_indices):
@@ -210,9 +219,15 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--metrics", default="id_arc,id_ins,id_cur", help="Comma-separated: id_arc,id_ins,id_cur")
     args = parser.parse_args()
 
-    model_paths = {"id_arc": args.id_arc, "id_ins": args.id_ins, "id_cur": args.id_cur}
+    selected = {value.strip().replace("-", "_") for value in args.metrics.split(",") if value.strip()}
+    available = {"id_arc": args.id_arc, "id_ins": args.id_ins, "id_cur": args.id_cur}
+    unknown = selected - set(available)
+    if unknown or not selected:
+        raise ValueError(f"invalid identity metrics: {sorted(unknown) if unknown else 'empty selection'}")
+    model_paths = {name: path for name, path in available.items() if name in selected}
     for path in [args.detector, *model_paths.values()]:
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -244,7 +259,7 @@ def main() -> int:
     for name in model_paths:
         metrics[name] = stats([case[name] for case in cases.values()])
         metrics[f"{name}_variance"] = stats([case[f"{name}_variance"] for case in cases.values()])
-    metrics["variance"] = metrics["id_arc_variance"]
+    metrics["variance"] = metrics.get("id_arc_variance")
     metrics["face_detection_rate"] = float(valid / sampled) if sampled else None
     payload = {
         "protocol": {

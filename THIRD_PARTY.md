@@ -10,6 +10,10 @@
 - Deep3DFaceRecon: <https://github.com/sicxu/Deep3DFaceRecon_pytorch>
 - pyIQA: <https://github.com/chaofengc/IQA-PyTorch>
 - VBench: <https://github.com/Vchitect/VBench>
+- DINO: <https://github.com/facebookresearch/dino>
 - nvdiffrast: <https://github.com/NVlabs/nvdiffrast>
 
 特别注意：InsightFace 提供的预训练模型可能带有非商业使用限制；Basel Face Model 相关资产也有独立许可。请在分发和使用前自行确认研究用途与授权范围。
+
+仓库中的 `vendor/` 仅保留评测运行所需的上游源码与许可证；训练代码、示例、
+模型权重和 BFM 数据不包含在内。

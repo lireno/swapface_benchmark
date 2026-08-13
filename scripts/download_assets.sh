@@ -9,4 +9,9 @@ modelscope download \
   --local_dir "$DESTINATION" \
   --max-workers "${MAX_WORKERS:-8}"
 
+modelscope download \
+  --model luozekai/swapface_benchmark_models \
+  --local_dir "$DESTINATION" \
+  --max-workers "${MAX_WORKERS:-8}"
+
 python "$ROOT/tools/validate_assets.py" --assets-root "$DESTINATION"

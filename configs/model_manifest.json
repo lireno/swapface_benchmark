@@ -72,6 +72,12 @@
       "description": "MUSIQ-SPAQ checkpoint used by VBench Imaging Quality",
       "size": 108610983,
       "sha256": "358bb6af275e28ea56821d44fb55c6cb83645db11f394d3ad65b2d149965ab50"
+    },
+    {
+      "path": "models/vbench/dino/dino_vitbase16_pretrain.pth",
+      "description": "DINO ViT-B/16 checkpoint used by VBench Subject Consistency",
+      "size": 343242485,
+      "sha256": "bf34ad0f424b9029b593e8dc3ed553bf26e88bcba0d32bf3e62a6209cb64c85e"
     }
   ]
 }

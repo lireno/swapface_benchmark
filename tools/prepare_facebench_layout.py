@@ -16,7 +16,10 @@ def ensure_link(source: Path, destination: Path) -> None:
     if os.path.lexists(destination):
         if destination.is_symlink() and destination.resolve() == source:
             return
-        raise FileExistsError(destination)
+        if destination.is_symlink():
+            destination.unlink()
+        else:
+            raise FileExistsError(destination)
     destination.symlink_to(source)
 
 
@@ -81,13 +84,12 @@ def main() -> int:
         ensure_link(Path(item["ref_video"]), source_dir / f"{video_id}.mp4")
         ensure_link(Path(item["ref_image"]), source_dir / f"{video_id}_ref_sim.png")
         ensure_link(Path(item["generated"]), target_dir / f"{video_id}_swapped.mp4")
-        mask_path = mask_cache / f"{video_id}_mask.mp4"
-        if not mask_path.is_file():
-            build_mask_video(
-                Path(item["ref_video"]),
-                Path(item["ref_video_face_boxes"]),
-                mask_path,
-            )
+        supplied_mask = Path(item["ref_video_face_boxes"])
+        if supplied_mask.suffix.lower() == ".json":
+            mask_path = mask_cache / f"{video_id}_mask.mp4"
+            build_mask_video(Path(item["ref_video"]), supplied_mask, mask_path)
+        else:
+            mask_path = supplied_mask
         ensure_link(mask_path, source_dir / f"{video_id}_mask.mp4")
         if index % 20 == 0:
             print(f"[facebench-layout] {index}/{len(mapping)}", flush=True)

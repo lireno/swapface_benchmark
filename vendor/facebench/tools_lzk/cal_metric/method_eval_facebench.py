@@ -703,15 +703,20 @@ class ComprehensiveEvaluator:
         print(f"Evaluating video: {video_id}")
 
 
-        # Align evaluation to the generated-video timeline. Training/inference
-        # resizes source and mask videos to 81 frames by linspace downsampling
-        # or last-frame padding; evaluating with raw source indices causes
-        # short videos to become empty and long videos to be temporally misaligned.
+        # The generated video defines the evaluation timeline. Source and mask
+        # frames are selected by timestamp; shorter dependencies are errors.
         source_vr = VideoReader(source_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
         target_vr = VideoReader(target_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
         source_total_frames = len(source_vr)
         target_total_frames = len(target_vr)
-        eval_frame_count = min(target_total_frames, 81)
+        eval_frame_count = target_total_frames
+        target_fps = float(target_vr.get_avg_fps())
+        source_fps = float(source_vr.get_avg_fps())
+        if source_total_frames / source_fps + 1.0 / source_fps < target_total_frames / target_fps:
+            raise RuntimeError(
+                f"origin video is shorter than generated video: origin={source_total_frames/source_fps:.6f}s, "
+                f"generated={target_total_frames/target_fps:.6f}s"
+            )
 
         if max_frames is not None and max_frames < eval_frame_count:
             if random_sampling:
@@ -724,10 +729,12 @@ class ComprehensiveEvaluator:
             eval_frame_indices = np.arange(eval_frame_count)
 
         target_frame_indices = eval_frame_indices.tolist()
-        source_frame_indices_for_eval = [
-            resize_frame_index(int(i), source_total_frames, eval_frame_count)
-            for i in eval_frame_indices
-        ]
+        source_frame_indices_for_eval = [int(round(int(i) / target_fps * source_fps)) for i in eval_frame_indices]
+        if source_frame_indices_for_eval and max(source_frame_indices_for_eval) >= source_total_frames:
+            raise RuntimeError(
+                f"origin video is shorter than generated timeline: need source frame "
+                f"{max(source_frame_indices_for_eval)}, available={source_total_frames}"
+            )
 
         
         # 提取目标视频帧
@@ -752,20 +759,29 @@ class ComprehensiveEvaluator:
         if mask_video_path and os.path.exists(mask_video_path):
             mask_vr = VideoReader(mask_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
             mask_total_frames = len(mask_vr)
-            mask_frame_indices_for_eval = [
-                resize_frame_index(int(i), mask_total_frames, eval_frame_count)
-                for i in eval_frame_indices
-            ]
+            mask_fps = float(mask_vr.get_avg_fps())
+            if mask_total_frames / mask_fps + 1.0 / mask_fps < target_total_frames / target_fps:
+                raise RuntimeError(
+                    f"mask video is shorter than generated video: mask={mask_total_frames/mask_fps:.6f}s, "
+                    f"generated={target_total_frames/target_fps:.6f}s"
+                )
+            mask_frame_indices_for_eval = [int(round(int(i) / target_fps * mask_fps)) for i in eval_frame_indices]
+            if mask_frame_indices_for_eval and max(mask_frame_indices_for_eval) >= mask_total_frames:
+                raise RuntimeError(
+                    f"mask video is shorter than generated timeline: need mask frame "
+                    f"{max(mask_frame_indices_for_eval)}, available={mask_total_frames}"
+                )
             mask_frames, _, mask_frame_indices = extract_video_frames(
                 mask_video_path, mask_frame_indices_for_eval
             )
             mask_frames = mask_frames
             mask_frame_indices = mask_frame_indices
         
-        # 对齐帧数
-        min_frames = min(len(target_frames), len(source_frames))
-        if mask_frames is not None:
-            min_frames = min(min_frames, len(mask_frames))
+        expected_frames = len(eval_frame_indices)
+        lengths = [len(target_frames), len(source_frames)] + ([len(mask_frames)] if mask_frames is not None else [])
+        if any(length != expected_frames for length in lengths):
+            raise RuntimeError(f"incomplete frame decode: expected={expected_frames}, decoded={lengths}")
+        min_frames = expected_frames
         
         target_frames = target_frames[:min_frames]
         source_frames = source_frames[:min_frames]

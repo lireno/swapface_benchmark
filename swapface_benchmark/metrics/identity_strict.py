@@ -68,6 +68,26 @@ def frame_count(path: Path) -> int:
     return count
 
 
+def video_fps(path: Path) -> float:
+    cap = cv2.VideoCapture(path.as_posix())
+    if not cap.isOpened():
+        raise RuntimeError(f"failed to open video: {path}")
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+    cap.release()
+    if fps <= 0:
+        raise RuntimeError(f"could not read FPS: {path}")
+    return fps
+
+
+def time_aligned_index(frame_idx: int, target_fps: float, source_fps: float, source_count: int) -> int:
+    index = int(round(frame_idx / target_fps * source_fps))
+    if index >= source_count:
+        raise RuntimeError(
+            f"source is shorter than generated timeline: need frame {index}, available frames={source_count}"
+        )
+    return index
+
+
 def read_frames(path: Path, indices: list[int]) -> list[np.ndarray]:
     cap = cv2.VideoCapture(path.as_posix())
     if not cap.isOpened():
@@ -110,10 +130,10 @@ def load_face_boxes(path: Path | None) -> dict[int, tuple[float, float, float, f
         return {}
     payload = json.loads(path.read_text(encoding="utf-8"))
     boxes: dict[int, tuple[float, float, float, float]] = {}
-    for key, value in payload.items():
+    for index, (_, value) in enumerate(sorted(payload.items(), key=lambda item: int(item[0]))):
         if not isinstance(value, list) or len(value) < 4:
             continue
-        boxes[int(key)] = (float(value[0]), float(value[1]), float(value[2]), float(value[3]))
+        boxes[index] = (float(value[0]), float(value[1]), float(value[2]), float(value[3]))
     return boxes
 
 
@@ -293,11 +313,24 @@ def evaluate_case(
     input_count = frame_count(input_video_path)
     mask_count = frame_count(mask_video_path) if crop_mode == "mask" and mask_is_video else input_count
     gt_count = frame_count(gt_video_path)
-    eval_count = min(gen_count, max_eval_frames)
-    eval_indices = sample_eval_indices(eval_count, sample_frames, random_sampling=random_sampling, seed=seed)
-    input_indices = [resize_frame_index(idx, input_count, eval_count) for idx in eval_indices]
-    mask_indices = [resize_frame_index(idx, mask_count, eval_count) for idx in eval_indices]
-    gt_indices = [resize_frame_index(idx, gt_count, eval_count) for idx in eval_indices]
+    eval_count = gen_count
+    sample_limit = min(sample_frames, max_eval_frames) if max_eval_frames > 0 else sample_frames
+    eval_indices = sample_eval_indices(eval_count, sample_limit, random_sampling=random_sampling, seed=seed)
+    generated_fps = video_fps(generated_path)
+    input_fps = video_fps(input_video_path)
+    gt_fps = video_fps(gt_video_path)
+    input_indices = [time_aligned_index(idx, generated_fps, input_fps, input_count) for idx in eval_indices]
+    gt_indices = [time_aligned_index(idx, generated_fps, gt_fps, gt_count) for idx in eval_indices]
+    if crop_mode == "mask" and mask_is_video:
+        mask_fps = video_fps(mask_video_path)
+        mask_indices = [time_aligned_index(idx, generated_fps, mask_fps, mask_count) for idx in eval_indices]
+    else:
+        mask_indices = input_indices
+    if crop_mode == "face-box" and (not face_boxes or max(input_indices, default=-1) >= len(face_boxes)):
+        raise RuntimeError(
+            f"face boxes are shorter than generated timeline: need index {max(input_indices, default=-1)}, "
+            f"available={len(face_boxes)}"
+        )
 
     ref_image = cv2.imread(ref_image_path.as_posix(), cv2.IMREAD_COLOR)
     if ref_image is None:

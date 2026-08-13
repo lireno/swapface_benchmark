@@ -39,6 +39,11 @@ def main() -> int:
             missing.append(path.as_posix())
         elif not args.skip_sha256 and sha256(path) != model["sha256"]:
             bad_hashes.append(path.as_posix())
+    for path in (
+        assets / "models/vbench/dino/dino_vitbase16_pretrain.pth",
+    ):
+        if not path.is_file():
+            missing.append(path.as_posix())
 
     if missing or bad_hashes:
         raise RuntimeError(

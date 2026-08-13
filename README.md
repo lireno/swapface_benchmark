@@ -2,7 +2,11 @@
 
 这是一个 200-case 长视频换脸 benchmark。数据和评测模型托管在 ModelScope，GitHub 仓库只保存评测代码、协议和模型 SHA256 清单。
 
-- 数据与模型：<https://www.modelscope.cn/datasets/lireno/swapface_benchmark>
+新机器环境部署、模型目录结构、ModelScope 打包与校验流程见
+[`MIGRATION.md`](MIGRATION.md)。
+
+- Benchmark 数据：<https://www.modelscope.cn/datasets/lireno/swapface_benchmark>
+- 评测模型：<https://www.modelscope.cn/models/luozekai/swapface_benchmark_models>
 - 代码：<https://github.com/lireno/swapface_benchmark>
 
 ## Benchmark 内容
@@ -29,6 +33,8 @@
 - `Gaze L2 / Gaze Cos`：L2CS-Net；
 - `Expression / Lighting`：Deep3DFaceRecon；
 - `VBench Imaging Quality`：MUSIQ-SPAQ。
+- `VBench Subject Consistency`：DINO ViT-B/16 相邻帧和首帧特征一致性；
+- `VBench Temporal Flickering`：连续帧像素 MAE（原始 VBench 口径面向静态视频，动态视频需谨慎解释）。
 
 ## 1. 安装
 
@@ -48,6 +54,14 @@ pip install git+https://github.com/NVlabs/nvdiffrast.git
 bash scripts/download_assets.sh
 ```
 
+也可以分别下载数据与公开模型包：
+
+```bash
+modelscope download --dataset lireno/swapface_benchmark --local_dir assets
+modelscope download --model luozekai/swapface_benchmark_models --local_dir assets
+cd assets && sha256sum -c SHA256SUMS
+```
+
 下载后目录为：
 
 ```text
@@ -65,7 +79,8 @@ assets/
     vbench/
 ```
 
-`download_assets.sh` 会按 `models/manifest.json` 自动校验全部模型 SHA256。
+`download_assets.sh` 会按 `models/manifest.json` 校验原有模型 SHA256，并下载 DINO 源码与
+ViT-B/16 权重；DINO revision 和权重 SHA256 会在下载及评测输出中记录。
 
 ## 3. 准备生成结果
 
@@ -81,7 +96,70 @@ results/
 
 准确 case 列表以 `assets/benchmark/manifest.json` 为准。
 
-## 4. 运行完整评测
+## 4. 一键评测
+
+默认从 benchmark assets 读取原视频、参考图和 face boxes，输出到
+`RESULTS_DIR/benchmark_eval/`：
+
+```bash
+bash scripts/evaluate.sh /path/to/results
+```
+
+模型默认使用 `--model-profile onboarding`，路径遵循
+`/mnt/cpfs/users/lyw/idvtrain/docs/2026-08-11_codex_project_onboarding.md`：
+
+- InsightFace 与 CurricularFace：`.cpfs_runtime/humanvid/models/`；
+- CosFace、Hopenet、L2CS、Deep3D：`hifivfs_facebench_package_20260521/`；
+- MUSIQ：`third_party/vbench_runtime/weights/`；
+- DINO 权重：当前 benchmark 的 `assets/models/vbench/dino/`；DINO 运行源码已精简并放在 `vendor/dino/`。
+
+若要全部使用本 benchmark 下载的模型：
+
+```bash
+bash scripts/evaluate.sh results --model-profile assets
+```
+
+也可通过 `ONBOARDING_ROOT`、`DEFAULT_*_MODEL`、`DEFAULT_ID_MODELS_DIR`、
+`DEFAULT_DEEP3D_ROOT`、`DEFAULT_DINO_ROOT` 环境变量覆盖单项模型位置。
+
+所有 metric 的运行源码均包含在本仓库的 `swapface_benchmark/` 与 `vendor/`
+目录中；模型权重、BFM、检测器数据等运行资产不随源码仓库分发。
+
+覆盖输入和输出路径：
+
+```bash
+bash scripts/evaluate.sh /path/to/results \
+  --manifest /path/to/benchmark/manifest.json \
+  --origin-dir /path/to/origin_videos \
+  --mask-dir /path/to/face_boxes_or_masks \
+  --ref-dir /path/to/ref_images \
+  --output-dir /path/to/evaluation
+```
+
+按指标选择或排除：
+
+```bash
+# 只跑三套独立身份 backbone
+bash scripts/evaluate.sh results --metrics id_arc,id_ins,id_cur
+
+# 跑全部，但排除 FaceBench 和 Subject Consistency
+bash scripts/evaluate.sh results \
+  --metrics all --exclude-metrics facebench,subject_consistency
+
+# 三项 VBench 指标，共享一次生成视频解码
+bash scripts/evaluate.sh results --metrics vbench
+```
+
+可用分组：`all`、`identity`、`identity_multi`、`facebench`、`vbench`、
+`temporal`。运行 `bash scripts/evaluate.sh --help` 查看全部原子指标。
+
+默认启用 resume：成功阶段记录输入 mapping 和参数签名，相同配置再次运行会跳过；失败
+阶段不会写成功签名，会在下次自动重试。`--no-resume` 可强制重算。
+
+生成视频是时间基准，原视频和 mask 按实际 FPS 映射。无法覆盖生成视频完整时长时会写入
+`errors.log` 和逐指标失败结果，不再静默截短或末帧补齐。
+
+### 兼容入口
 
 单卡：
 
@@ -115,7 +193,7 @@ outputs/my_method/summary.json
 
 - manifest 中全部媒体路径均相对于 `assets/benchmark/manifest.json`；
 - `face_boxes.json` 的数字键不要求从 0 开始，按数值排序后的第一项对应视频第 1 帧；
-- 生成视频按自身时间轴抽取评测帧，origin video 按相对时间位置映射到相同数量的帧；
+- 生成视频按完整自身时间轴抽取评测帧，origin video 和 mask 按实际 FPS 时间戳映射；
 - 所有 ID 模型共享 SCRFD 五点对齐；
 - 模型路径和 SHA256 记录在 [`configs/model_manifest.json`](configs/model_manifest.json)。
 

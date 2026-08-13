@@ -57,7 +57,7 @@ except ImportError:
 # 添加Deep3DFaceRecon_pytorch相关导入
 # Deep3DFaceRecon_pytorch 路径
 deep3d_path = os.path.join(project_root, "eval_tools", "third_party", "Deep3DFaceRecon_pytorch")
-sys.path.append(deep3d_path)
+sys.path.insert(0, deep3d_path)
 
 DEEP3D_AVAILABLE = True
 SHOW_INNER_PROGRESS = False
@@ -126,8 +126,10 @@ class MetricsCalculator:
         # Ray会自动分配CUDA设备，无需手动指定device
         # breakpoint()
         self.device = device
-        self.lpips_metric_calculator = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').to(self.device)
-        self.ssim_metric_calculator = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
+        # LPIPS downloads a SqueezeNet checkpoint. Construct quality helpers
+        # lazily so disabled metrics do not perform hidden network I/O.
+        self.lpips_metric_calculator = None
+        self.ssim_metric_calculator = None
 
         # print(f"LPIPS model load on {get_model_device(self.lpips_metric_calculator)}")
         # print(f"SSIM model load on {get_model_device(self.ssim_metric_calculator)}")
@@ -1028,6 +1030,8 @@ class MetricsCalculator:
         Returns:
             LPIPS分数
         """
+        if self.lpips_metric_calculator is None:
+            self.lpips_metric_calculator = LearnedPerceptualImagePatchSimilarity(net_type='squeeze').to(self.device)
         img_pred = np.array(img_pred).astype(np.float32)/255
         img_gt = np.array(img_gt).astype(np.float32)/255
         assert img_pred.shape == img_gt.shape, "Image shapes should be the same."
@@ -1059,6 +1063,8 @@ class MetricsCalculator:
         Returns:
             SSIM分数
         """
+        if self.ssim_metric_calculator is None:
+            self.ssim_metric_calculator = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         img_pred = np.array(img_pred).astype(np.float32)/255
         img_gt = np.array(img_gt).astype(np.float32)/255
         assert img_pred.shape == img_gt.shape, "Image shapes should be the same."

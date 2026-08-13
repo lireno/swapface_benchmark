@@ -19,13 +19,13 @@ def resolve_asset(manifest_path: Path, relative_path: str) -> Path:
 
 
 def find_generated(results_dir: Path, case_id: str) -> Path:
-    candidates = [
-        results_dir / f"{case_id}.mp4",
-        results_dir / "videos" / f"{case_id}.mp4",
-    ]
+    aliases = [case_id]
+    if "-long-" in case_id:
+        aliases.append(case_id.replace("-long-", "-", 1))
+    candidates = [parent / f"{alias}.mp4" for parent in (results_dir, results_dir / "videos") for alias in aliases]
     matches = [path for path in candidates if path.is_file()]
     if not matches:
-        matches = sorted(results_dir.glob(f"**/{case_id}*.mp4"))
+        matches = sorted({path for alias in aliases for path in results_dir.glob(f"**/{alias}*.mp4")})
     if len(matches) != 1:
         raise RuntimeError(f"expected exactly one result for {case_id}, found {len(matches)}")
     return matches[0].resolve()
@@ -37,6 +37,9 @@ def main() -> int:
     parser.add_argument("--results-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--origin-dir", type=Path)
+    parser.add_argument("--mask-dir", type=Path)
+    parser.add_argument("--ref-dir", type=Path)
     args = parser.parse_args()
 
     payload = load_json(args.manifest)
@@ -46,15 +49,33 @@ def main() -> int:
     mapping: list[dict[str, Any]] = []
     for index, case in enumerate(cases, start=1):
         case_id = case["case_id"]
-        face_boxes = resolve_asset(args.manifest, case["face_boxes"])
+        face_boxes = (
+            next((path for path in (
+                args.mask_dir / f"{case_id}.json",
+                args.mask_dir / f"{case_id}.mp4",
+                args.mask_dir / f"{case_id}_mask.mp4",
+            ) if path.is_file()), None)
+            if args.mask_dir else resolve_asset(args.manifest, case["face_boxes"])
+        )
+        if face_boxes is None:
+            raise FileNotFoundError(f"mask/face boxes not found for {case_id} in {args.mask_dir}")
+        origin_video = args.origin_dir / f"{case_id}.mp4" if args.origin_dir else resolve_asset(args.manifest, case["origin_video"])
+        ref_image = args.ref_dir / f"{case_id}.jpg" if args.ref_dir else resolve_asset(args.manifest, case["ref_image"])
+        if not origin_video.is_file():
+            raise FileNotFoundError(origin_video)
+        if not ref_image.is_file():
+            png = ref_image.with_suffix(".png")
+            if not png.is_file():
+                raise FileNotFoundError(ref_image)
+            ref_image = png
         row = {
             **case,
             "name": case_id,
             "facebench_video_id": f"{index:05d}",
-            "ref_image": resolve_asset(args.manifest, case["ref_image"]).as_posix(),
-            "ref_video": resolve_asset(args.manifest, case["origin_video"]).as_posix(),
-            "ref_video_face_boxes": face_boxes.as_posix(),
-            "ref_video_facemask": face_boxes.as_posix(),
+            "ref_image": ref_image.resolve().as_posix(),
+            "ref_video": origin_video.resolve().as_posix(),
+            "ref_video_face_boxes": face_boxes.resolve().as_posix(),
+            "ref_video_facemask": face_boxes.resolve().as_posix(),
             "ground_truth": resolve_asset(args.manifest, case["gan_swapped_video"]).as_posix(),
             "generated": find_generated(args.results_dir, case_id).as_posix(),
         }
