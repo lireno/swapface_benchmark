@@ -63,11 +63,11 @@ class EvalConfig:
     # 评估参数
     # max_frames: Optional[int] = None  # 最大帧数
     # max_frames: Optional[int] = 10  # 最大帧数
-    max_frames: Optional[int] = 100  # 最大帧数
+    max_frames: Optional[int] = int(os.getenv("MAX_EVAL_FRAMES", "0")) or None  # None 表示全测
     video_num: Optional[int] = None  # 最多处理的视频数量，None表示处理所有视频
     use_align: bool = False  # 是否使用对齐数据
     target_face_type: str = "png"  # 目标人脸图像类型
-    random_sampling: bool = True  # 是否使用随机采样模式
+    random_sampling: bool = os.getenv("RANDOM_SAMPLING", "0") == "1"
     
     # 测试选项配置
     # enable_face_sim: bool = True   # 是否测试人脸相似度
@@ -694,6 +694,8 @@ class ComprehensiveEvaluator:
         ref_face_path = video_data['ref_face_path']
         video_id = video_data['video_id']
         max_frames = video_data.get('max_frames', None)
+        if max_frames is not None and max_frames <= 0:
+            max_frames = None
         random_sampling = video_data.get('random_sampling', False)
 
         # 获取当前视频的ref_type
@@ -712,19 +714,13 @@ class ComprehensiveEvaluator:
         eval_frame_count = target_total_frames
         target_fps = float(target_vr.get_avg_fps())
         source_fps = float(source_vr.get_avg_fps())
-        if source_total_frames / source_fps + 1.0 / source_fps < target_total_frames / target_fps:
-            raise RuntimeError(
-                f"origin video is shorter than generated video: origin={source_total_frames/source_fps:.6f}s, "
-                f"generated={target_total_frames/target_fps:.6f}s"
-            )
-
         if max_frames is not None and max_frames < eval_frame_count:
             if random_sampling:
                 np.random.seed(42)
                 eval_frame_indices = np.random.choice(eval_frame_count, max_frames, replace=False)
                 eval_frame_indices = np.sort(eval_frame_indices)
             else:
-                eval_frame_indices = np.linspace(0, eval_frame_count - 1, max_frames, dtype=int)
+                eval_frame_indices = np.arange(max_frames)
         else:
             eval_frame_indices = np.arange(eval_frame_count)
 
@@ -760,11 +756,6 @@ class ComprehensiveEvaluator:
             mask_vr = VideoReader(mask_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
             mask_total_frames = len(mask_vr)
             mask_fps = float(mask_vr.get_avg_fps())
-            if mask_total_frames / mask_fps + 1.0 / mask_fps < target_total_frames / target_fps:
-                raise RuntimeError(
-                    f"mask video is shorter than generated video: mask={mask_total_frames/mask_fps:.6f}s, "
-                    f"generated={target_total_frames/target_fps:.6f}s"
-                )
             mask_frame_indices_for_eval = [int(round(int(i) / target_fps * mask_fps)) for i in eval_frame_indices]
             if mask_frame_indices_for_eval and max(mask_frame_indices_for_eval) >= mask_total_frames:
                 raise RuntimeError(

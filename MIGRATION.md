@@ -118,6 +118,7 @@ benchmark 数据包应提供：
 ```text
 assets/
 ├── benchmark/manifest.json
+├── benchmark/non_long_200/manifest.json
 ├── origin_videos/
 ├── reference_images/
 └── face_boxes/
@@ -145,6 +146,7 @@ PY
 export PYTHON_BIN=/path/to/facebench/bin/python
 
 bash scripts/evaluate.sh /path/to/results \
+  --benchmark-mode short \
   --model-profile assets \
   --models-root /data/swapface_benchmark_assets/models \
   --assets-root /data/swapface_benchmark_assets \
@@ -171,9 +173,12 @@ bash scripts/evaluate.sh /path/to/results \
   --exclude-metrics expression,lighting
 ```
 
-默认启用 resume。成功且输入签名一致的阶段会跳过；使用 `--no-resume` 强制重算。
-评测日志、错误记录、各阶段 JSON 和最终 `summary.json` 默认写入
-`RESULTS_DIR/benchmark_eval/`。
+模式和帧协议：
+
+- `--benchmark-mode short` 使用 `benchmark/non_long_200/manifest.json`，连续取输出视频最前面的最多 81 帧；
+- `--benchmark-mode long` 使用 `benchmark/manifest.json`，连续评测全部输出帧。
+
+默认启用 resume。成功且输入签名一致的阶段会跳过；模式和帧窗口包含在签名中，short 与 long 不会混用缓存。使用 `--no-resume` 强制重算。评测日志、错误记录、各阶段 JSON 和最终 `summary.json` 默认分别写入 `RESULTS_DIR/benchmark_eval_short/` 或 `RESULTS_DIR/benchmark_eval_long/`。
 
 ## 7. 指标与模型对应关系
 

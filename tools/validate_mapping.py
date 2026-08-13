@@ -40,6 +40,7 @@ def main() -> int:
     parser.add_argument("--mapping", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--errors", type=Path, required=True)
+    parser.add_argument("--max-frames", type=int, default=0, help="validate first N generated frames; 0 validates all")
     args = parser.parse_args()
     mapping = json.loads(args.mapping.read_text(encoding="utf-8"))
     cases, errors = [], []
@@ -48,6 +49,9 @@ def main() -> int:
         report: dict[str, Any] = {"case_id": case_id}
         try:
             generated = video_info(Path(item["generated"]))
+            evaluated_frames = min(generated["frames"], args.max_frames) if args.max_frames > 0 else generated["frames"]
+            generated["evaluated_frames"] = evaluated_frames
+            generated["evaluated_duration"] = evaluated_frames / generated["fps"]
             report["generated"] = generated
         except Exception as error:
             errors.append({"case_id": case_id, "dependency": "generated", "error_code": "INVALID_GENERATED", "error": str(error)})
@@ -57,8 +61,8 @@ def main() -> int:
             origin = video_info(Path(item["ref_video"]))
             report["origin"] = origin
             tolerance = 1.0 / origin["fps"]
-            if origin["duration"] + tolerance < generated["duration"]:
-                errors.append({"case_id": case_id, "dependency": "origin", "error_code": "ORIGIN_TOO_SHORT", "generated_duration": generated["duration"], "available_duration": origin["duration"]})
+            if origin["duration"] + tolerance < generated["evaluated_duration"]:
+                errors.append({"case_id": case_id, "dependency": "origin", "error_code": "ORIGIN_TOO_SHORT", "required_duration": generated["evaluated_duration"], "available_duration": origin["duration"]})
         except Exception as error:
             errors.append({"case_id": case_id, "dependency": "origin", "error_code": "INVALID_ORIGIN", "error": str(error)})
             cases.append(report)
@@ -67,12 +71,12 @@ def main() -> int:
             mask = mask_coverage(Path(item["ref_video_facemask"]), origin)
             report["mask"] = mask
             tolerance = 1.0 / mask["fps"]
-            if mask["duration"] + tolerance < generated["duration"]:
-                errors.append({"case_id": case_id, "dependency": "mask", "error_code": "MASK_TOO_SHORT", "generated_duration": generated["duration"], "available_duration": mask["duration"]})
+            if mask["duration"] + tolerance < generated["evaluated_duration"]:
+                errors.append({"case_id": case_id, "dependency": "mask", "error_code": "MASK_TOO_SHORT", "required_duration": generated["evaluated_duration"], "available_duration": mask["duration"]})
         except Exception as error:
             errors.append({"case_id": case_id, "dependency": "mask", "error_code": "INVALID_MASK", "error": str(error)})
         cases.append(report)
-    payload = {"case_count": len(cases), "error_count": len(errors), "cases": cases, "errors": errors}
+    payload = {"case_count": len(cases), "error_count": len(errors), "max_frames": args.max_frames, "cases": cases, "errors": errors}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     args.errors.write_text("\n".join(json.dumps(error, ensure_ascii=False) for error in errors) + ("\n" if errors else ""), encoding="utf-8")

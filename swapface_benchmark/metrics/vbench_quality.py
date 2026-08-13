@@ -88,7 +88,7 @@ def musiq_preprocess(frames: list[np.ndarray]) -> torch.Tensor:
 
 def evaluate_video(
     path: Path, selected: set[str], device: torch.device, batch_size: int,
-    musiq: torch.nn.Module | None, dino: torch.nn.Module | None,
+    musiq: torch.nn.Module | None, dino: torch.nn.Module | None, max_frames: int = 0,
 ) -> dict[str, Any]:
     capture = cv2.VideoCapture(path.as_posix())
     if not capture.isOpened():
@@ -127,6 +127,8 @@ def evaluate_video(
 
     try:
         while True:
+            if max_frames > 0 and frame_count >= max_frames:
+                break
             ok, frame = capture.read()
             if not ok:
                 break
@@ -145,9 +147,13 @@ def evaluate_video(
         capture.release()
     if frame_count == 0:
         raise RuntimeError("no frames decoded")
-    if declared > 0 and frame_count != declared:
+    expected = min(declared, max_frames) if declared > 0 and max_frames > 0 else declared
+    if expected > 0 and frame_count != expected:
         raise RuntimeError(f"decoded {frame_count} frames but container declares {declared}")
-    result: dict[str, Any] = {"frame_count": frame_count, "adjacent_pair_count": max(0, frame_count - 1)}
+    result: dict[str, Any] = {
+        "frame_count": frame_count, "source_frame_count": declared,
+        "adjacent_pair_count": max(0, frame_count - 1),
+    }
     if "imaging_quality" in selected:
         result["raw_musiq_spaq"] = float(np.mean(musiq_scores))
         result["vbench_imaging_quality"] = result["raw_musiq_spaq"] / 100.0
@@ -172,6 +178,7 @@ def main() -> int:
     parser.add_argument("--dino-model", type=Path, default=PROJECT_ROOT / "assets/models/vbench/dino/dino_vitbase16_pretrain.pth")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--max-frames", type=int, default=0, help="first N frames; 0 evaluates all frames")
     args = parser.parse_args()
     selected = parse_metrics(args.metrics)
     if not selected:
@@ -190,7 +197,7 @@ def main() -> int:
     cases, failures = [], []
     for index, item in enumerate(mapping, 1):
         try:
-            result = evaluate_video(Path(item["generated"]), selected, device, args.batch_size, musiq, dino)
+            result = evaluate_video(Path(item["generated"]), selected, device, args.batch_size, musiq, dino, args.max_frames)
             cases.append({"case_id": item.get("case_id", item.get("name", str(index))), "video": item["generated"], **result})
         except Exception as error:
             failures.append({"case_id": item.get("case_id", item.get("name", str(index))), "video": item.get("generated"), "error": f"{type(error).__name__}: {error}"})
@@ -209,6 +216,7 @@ def main() -> int:
             "subject_consistency": "VBench DINO ViT-B/16: mean of adjacent-frame and first-frame cosine similarities.",
             "temporal_flickering": "VBench adjacent-frame pixel MAE; intended for static videos and not motion compensated.",
             "aggregation": "Per-video macro mean in summary.",
+            "max_frames": args.max_frames,
         },
         "mapping": args.mapping.resolve().as_posix(), "models": models,
         "case_count": len(cases), "failure_count": len(failures), "metrics": metrics,

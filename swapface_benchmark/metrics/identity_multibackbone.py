@@ -143,7 +143,8 @@ def prepare_generated_frames(
     input_count = frame_count(input_video_path)
     input_shape = video_shape(input_video_path)
     eval_count = generated_count
-    sample_limit = min(sample_frames, max_eval_frames) if max_eval_frames > 0 else sample_frames
+    positive_limits = [value for value in (sample_frames, max_eval_frames) if value > 0]
+    sample_limit = min(positive_limits) if positive_limits else 0
     eval_indices = sample_eval_indices(eval_count, sample_limit, random_sampling=False, seed=seed)
     generated_fps = video_fps(generated_path)
     input_fps = video_fps(input_video_path)

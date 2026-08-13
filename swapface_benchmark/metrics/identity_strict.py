@@ -104,12 +104,12 @@ def read_frames(path: Path, indices: list[int]) -> list[np.ndarray]:
 
 
 def sample_eval_indices(eval_frame_count: int, max_frames: int, random_sampling: bool, seed: int) -> list[int]:
-    if eval_frame_count <= max_frames:
+    if max_frames <= 0 or eval_frame_count <= max_frames:
         return list(range(eval_frame_count))
     if random_sampling:
         np.random.seed(seed)
         return sorted(int(x) for x in np.random.choice(eval_frame_count, max_frames, replace=False))
-    return [int(x) for x in np.linspace(0, eval_frame_count - 1, max_frames, dtype=int)]
+    return list(range(max_frames))
 
 
 def calculate_bbox_from_mask(mask_frame: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -314,7 +314,8 @@ def evaluate_case(
     mask_count = frame_count(mask_video_path) if crop_mode == "mask" and mask_is_video else input_count
     gt_count = frame_count(gt_video_path)
     eval_count = gen_count
-    sample_limit = min(sample_frames, max_eval_frames) if max_eval_frames > 0 else sample_frames
+    positive_limits = [value for value in (sample_frames, max_eval_frames) if value > 0]
+    sample_limit = min(positive_limits) if positive_limits else 0
     eval_indices = sample_eval_indices(eval_count, sample_limit, random_sampling=random_sampling, seed=seed)
     generated_fps = video_fps(generated_path)
     input_fps = video_fps(input_video_path)

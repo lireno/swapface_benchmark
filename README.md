@@ -1,11 +1,12 @@
 # SwapFace Benchmark
 
-这是一个 200-case 长视频换脸 benchmark。数据和评测模型托管在 ModelScope，GitHub 仓库只保存评测代码、协议和模型 SHA256 清单。
+这是一个同时支持 short 与 long 两套 200-case 数据的换脸 benchmark。数据和评测模型托管在 ModelScope，GitHub 仓库只保存评测代码、协议和模型 SHA256 清单。
 
 新机器环境部署、模型目录结构、ModelScope 打包与校验流程见
 [`MIGRATION.md`](MIGRATION.md)。
 
-- Benchmark 数据：<https://www.modelscope.cn/datasets/lireno/swapface_benchmark>
+- Short 数据：<https://www.modelscope.cn/datasets/lireno/swapface_benchmark/tree/master/benchmark/non_long_200>
+- Long 数据：<https://www.modelscope.cn/datasets/lireno/swapface_benchmark/tree/master/benchmark>
 - 评测模型：<https://www.modelscope.cn/models/luozekai/swapface_benchmark_models>
 - 代码：<https://github.com/lireno/swapface_benchmark>
 
@@ -19,7 +20,12 @@
 - `gan_swapped_video`：GAN 逐帧换脸 baseline；
 - FPS、face-box 帧范围和时长元数据。
 
-筛选过程：从 Part005 随机抽取，按 `(face_box 最后帧号 - 第一帧号) / 25 > 10` 初筛，排除 FPS 大于等于 50 的视频，人工排除 30 个低质量 case，再以随机种子 `20260728` 从剩余 220 个中选择 200 个。按实际 FPS 换算，其中 179 个视频超过 10 秒。
+数据分为两套独立协议：
+
+- `short`：使用 `benchmark/non_long_200/manifest.json`。每个输出视频只评测最前面的 `min(总帧数, 81)` 帧，即帧下标 `0..80`；绝不在全片上均匀采样。
+- `long`：使用 `benchmark/manifest.json`，评测输出视频的全部帧。
+
+long 的筛选过程：从 Part005 随机抽取，按 `(face_box 最后帧号 - 第一帧号) / 25 > 10` 初筛，排除 FPS 大于等于 50 的视频，人工排除 30 个低质量 case，再以随机种子 `20260728` 从剩余 220 个中选择 200 个。按实际 FPS 换算，其中 179 个视频超过 10 秒。
 
 ## 评测指标
 
@@ -68,6 +74,8 @@ cd assets && sha256sum -c SHA256SUMS
 assets/
   benchmark/
     manifest.json
+    non_long_200/
+      manifest.json
     ref_images/
     origin_videos/
     face_boxes/
@@ -94,15 +102,21 @@ results/
   part005-long-250.mp4  # 仅实际入选的 200 个 ID 会出现在 manifest 中
 ```
 
-准确 case 列表以 `assets/benchmark/manifest.json` 为准。
+准确 case 列表以对应模式的 manifest 为准：short 使用 `assets/benchmark/non_long_200/manifest.json`，long 使用 `assets/benchmark/manifest.json`。
 
 ## 4. 一键评测
 
-默认从 benchmark assets 读取原视频、参考图和 face boxes，输出到
-`RESULTS_DIR/benchmark_eval/`：
+默认模式是 short，从 benchmark assets 读取原视频、参考图和 face boxes，输出到
+`RESULTS_DIR/benchmark_eval_short/`：
 
 ```bash
-bash scripts/evaluate.sh /path/to/results
+bash scripts/evaluate.sh /path/to/results --benchmark-mode short
+```
+
+评测 long 数据（全部帧）：
+
+```bash
+bash scripts/evaluate.sh /path/to/results --benchmark-mode long
 ```
 
 模型默认使用 `--model-profile onboarding`，路径遵循
@@ -116,7 +130,7 @@ bash scripts/evaluate.sh /path/to/results
 若要全部使用本 benchmark 下载的模型：
 
 ```bash
-bash scripts/evaluate.sh results --model-profile assets
+bash scripts/evaluate.sh results --benchmark-mode short --model-profile assets
 ```
 
 也可通过 `ONBOARDING_ROOT`、`DEFAULT_*_MODEL`、`DEFAULT_ID_MODELS_DIR`、
@@ -129,6 +143,7 @@ bash scripts/evaluate.sh results --model-profile assets
 
 ```bash
 bash scripts/evaluate.sh /path/to/results \
+  --benchmark-mode short \
   --manifest /path/to/benchmark/manifest.json \
   --origin-dir /path/to/origin_videos \
   --mask-dir /path/to/face_boxes_or_masks \
@@ -156,8 +171,7 @@ bash scripts/evaluate.sh results --metrics vbench
 默认启用 resume：成功阶段记录输入 mapping 和参数签名，相同配置再次运行会跳过；失败
 阶段不会写成功签名，会在下次自动重试。`--no-resume` 可强制重算。
 
-生成视频是时间基准，原视频和 mask 按实际 FPS 映射。无法覆盖生成视频完整时长时会写入
-`errors.log` 和逐指标失败结果，不再静默截短或末帧补齐。
+生成视频是时间基准，原视频和 mask 按实际 FPS 映射。short 只检查并使用生成视频前 81 帧对应的时间窗口；long 检查并使用完整生成视频时间轴。原视频或 mask 无法覆盖实际评测窗口时会写入 `errors.log` 和逐指标失败结果，不再静默截短或末帧补齐。
 
 ### 兼容入口
 
@@ -177,7 +191,7 @@ GPU_LIST=0,1,2,3 NUM_GPUS=4 \
 先跑一个 case 验证环境：
 
 ```bash
-LIMIT=1 SAMPLE_FRAMES=8 \
+LIMIT=1 BENCHMARK_MODE=short \
   bash scripts/run_benchmark.sh results outputs/smoke
 ```
 
@@ -191,9 +205,9 @@ outputs/my_method/summary.json
 
 ## 数据和结果约定
 
-- manifest 中全部媒体路径均相对于 `assets/benchmark/manifest.json`；
+- manifest 中媒体路径相对于各自的 manifest；
 - `face_boxes.json` 的数字键不要求从 0 开始，按数值排序后的第一项对应视频第 1 帧；
-- 生成视频按完整自身时间轴抽取评测帧，origin video 和 mask 按实际 FPS 时间戳映射；
+- short 固定连续取最前面的最多 81 帧，long 连续取全部帧；origin video 和 mask 按实际 FPS 时间戳映射；
 - 所有 ID 模型共享 SCRFD 五点对齐；
 - 模型路径和 SHA256 记录在 [`configs/model_manifest.json`](configs/model_manifest.json)。
 
