@@ -203,6 +203,65 @@ outputs/my_method/summary.json
 
 各指标的逐 case 结果也会单独保存在输出目录。
 
+## 5. Short / Long 评测网页
+
+网页使用显式注册表，Short 与 Long 完全分开。第一次使用时运行一次初始化脚本：
+
+```bash
+bash scripts/initialize_eval_gallery.sh
+```
+
+默认读取：
+
+```text
+/mnt/cpfs/users/lzk/dataset/swapface_benchmark/short_200/benchmark/non_long_200/manifest.json
+/mnt/cpfs/users/lzk/dataset/swapface_benchmark/long_200/benchmark/manifest.json
+```
+
+在其他机器上可通过 `SWAPFACE_BENCHMARK_DATASET_ROOT`，或者 `SHORT_MANIFEST`、
+`LONG_MANIFEST` 环境变量指定数据位置。初始化后页面位于：
+
+```text
+web_reports/short/index.html
+web_reports/long/index.html
+```
+
+后续评测只需要增加 `--register`。注册成功后会自动更新对应网页：
+
+```bash
+bash scripts/evaluate.sh /path/to/results \
+  --benchmark-mode short \
+  --register \
+  --register-id gtid-id5-flow10-step25-seed42 \
+  --register-label "GTID id5 flow10 · 25 steps" \
+  --register-group GTID \
+  --register-tags maskroi,25step,id5 \
+  --register-model /path/to/model \
+  --register-model-url https://modelscope.cn/models/example/model \
+  --register-steps 25 \
+  --register-seed 42
+```
+
+`--register-id` 省略时使用结果目录名；相同 ID 再次注册会更新原条目，不会产生重复项。
+注册要求完整的 200-case mapping 和 summary，因而 `--limit` smoke test 不会误注册成正式结果。
+注册表保存在 `registries/short.json` 和 `registries/long.json`，网页视频使用指向原结果的
+符号链接，不会复制 200 份视频。
+
+网页结果视频应使用浏览器兼容的 H.264/avc1 + yuv420p。已有注册结果若是 OpenCV
+`mp4v`/FMP4，可原子转码并保留帧数和 FPS：
+
+```bash
+python tools/transcode_registered_h264.py --benchmark-mode short --workers 8
+```
+
+用 HTTP 服务查看网页，避免浏览器对 `file://` JSON 和视频加载的限制：
+
+```bash
+python -m http.server 8000 --directory web_reports
+# Short: http://127.0.0.1:8000/short/
+# Long:  http://127.0.0.1:8000/long/
+```
+
 ## 数据和结果约定
 
 - manifest 中媒体路径相对于各自的 manifest；

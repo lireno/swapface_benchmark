@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "benchmark_mode": "long",
+  "manifest": "/mnt/cpfs/users/lzk/dataset/swapface_benchmark/long_200/benchmark/manifest.json",
+  "manifest_sha256": "06002b2ad9cb6444d93594d01f1d6175d857b6376c730179501637934de8b436",
+  "case_count": 200,
+  "runs": []
+}

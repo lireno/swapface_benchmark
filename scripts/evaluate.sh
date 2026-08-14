@@ -41,6 +41,15 @@ usage() {
 #   --gpu-list LIST           visible GPU IDs (default: 0)
 #   --model-profile NAME      onboarding or assets (default: onboarding)
 #   --models-root DIR         model root for the assets profile
+#   --register                register this completed eval and rebuild its gallery
+#   --register-id ID          stable unique ID (default: RESULTS_DIR basename)
+#   --register-label LABEL    display label (default: register ID)
+#   --register-group GROUP    display group (default: Other)
+#   --register-tags LIST      comma-separated display tags
+#   --register-model PATH     evaluated model/checkpoint path
+#   --register-model-url URL  model source URL
+#   --register-steps N        inference steps recorded in the gallery
+#   --register-seed N         inference seed recorded in the gallery
 
 [[ $# -gt 0 ]] || { usage; exit 2; }
 [[ "$1" != "-h" && "$1" != "--help" ]] || { usage; exit 0; }
@@ -61,6 +70,17 @@ GPU_LIST=0
 NUM_GPUS=""
 MODEL_PROFILE="onboarding"
 MODELS_ROOT=""
+REGISTER=0
+REGISTER_ID=""
+REGISTER_LABEL=""
+REGISTER_GROUP="Other"
+REGISTER_TAGS=""
+REGISTER_MODEL=""
+REGISTER_MODEL_URL=""
+REGISTER_CHECKPOINT_STEP=""
+REGISTER_STEPS=""
+REGISTER_SEED=""
+REGISTER_NOTES=""
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 while [[ $# -gt 0 ]]; do
@@ -81,6 +101,18 @@ while [[ $# -gt 0 ]]; do
     --num-gpus) NUM_GPUS="$2"; shift 2 ;;
     --model-profile) MODEL_PROFILE="$2"; shift 2 ;;
     --models-root) MODELS_ROOT="$2"; shift 2 ;;
+    --register) REGISTER=1; shift ;;
+    --no-register) REGISTER=0; shift ;;
+    --register-id) REGISTER_ID="$2"; shift 2 ;;
+    --register-label) REGISTER_LABEL="$2"; shift 2 ;;
+    --register-group) REGISTER_GROUP="$2"; shift 2 ;;
+    --register-tags) REGISTER_TAGS="$2"; shift 2 ;;
+    --register-model) REGISTER_MODEL="$2"; shift 2 ;;
+    --register-model-url) REGISTER_MODEL_URL="$2"; shift 2 ;;
+    --register-checkpoint-step) REGISTER_CHECKPOINT_STEP="$2"; shift 2 ;;
+    --register-steps) REGISTER_STEPS="$2"; shift 2 ;;
+    --register-seed) REGISTER_SEED="$2"; shift 2 ;;
+    --register-notes) REGISTER_NOTES="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage; exit 2 ;;
   esac
@@ -274,4 +306,17 @@ printf 'Benchmark complete: %s\n' "$OUTPUT_DIR/summary.json"
 if [[ ${#FAILED_STAGES[@]} -gt 0 ]]; then
   printf 'Failed stages: %s\n' "${FAILED_STAGES[*]}" >&2
   exit 1
+fi
+if [[ "$REGISTER" == 1 ]]; then
+  REGISTER_ARGS=(register --benchmark-mode "$BENCHMARK_MODE" --results-dir "$RESULTS_DIR" --evaluation-dir "$OUTPUT_DIR" --group "$REGISTER_GROUP")
+  [[ -n "$REGISTER_ID" ]] && REGISTER_ARGS+=(--run-id "$REGISTER_ID")
+  [[ -n "$REGISTER_LABEL" ]] && REGISTER_ARGS+=(--label "$REGISTER_LABEL")
+  [[ -n "$REGISTER_TAGS" ]] && REGISTER_ARGS+=(--tags "$REGISTER_TAGS")
+  [[ -n "$REGISTER_MODEL" ]] && REGISTER_ARGS+=(--model-path "$REGISTER_MODEL")
+  [[ -n "$REGISTER_MODEL_URL" ]] && REGISTER_ARGS+=(--model-url "$REGISTER_MODEL_URL")
+  [[ -n "$REGISTER_CHECKPOINT_STEP" ]] && REGISTER_ARGS+=(--checkpoint-step "$REGISTER_CHECKPOINT_STEP")
+  [[ -n "$REGISTER_STEPS" ]] && REGISTER_ARGS+=(--inference-steps "$REGISTER_STEPS")
+  [[ -n "$REGISTER_SEED" ]] && REGISTER_ARGS+=(--seed "$REGISTER_SEED")
+  [[ -n "$REGISTER_NOTES" ]] && REGISTER_ARGS+=(--notes "$REGISTER_NOTES")
+  "$PYTHON_BIN" "$ROOT/tools/eval_gallery.py" "${REGISTER_ARGS[@]}"
 fi

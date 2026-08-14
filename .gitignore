@@ -1,6 +1,8 @@
 assets/
 outputs/
 results/
+web_reports/
+registries/.*.lock
 __pycache__/
 *.pyc
 .pytest_cache/

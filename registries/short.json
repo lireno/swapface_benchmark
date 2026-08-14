@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "benchmark_mode": "short",
+  "manifest": "/mnt/cpfs/users/lzk/dataset/swapface_benchmark/short_200/benchmark/non_long_200/manifest.json",
+  "manifest_sha256": "ba45dbc7cf479e5a077d21a90ab506f77f6e50978e2c5b93f467519b8c667182",
+  "case_count": 200,
+  "runs": [
+    {
+      "run_id": "maskroi-refid-id1-flow100-step4-seed42",
+      "label": "MaskROI RefID id1 flow100 · 4 steps",
+      "group": "RefID",
+      "tags": [
+        "maskroi",
+        "idnn065",
+        "4step",
+        "refid"
+      ],
+      "benchmark_mode": "short",
+      "model_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/2026-08-12-dreamidv-maskroi-refid-id1-flow100-boundary-idnn065-10k-4gpu-gacc2-1k",
+      "model_url": "https://www.modelscope.cn/models/luozekai/2026-08-12-dreamidv-maskroi-refid-id1-flow100-boundary-idnn065-10k-4gpu-gacc2-1k",
+      "checkpoint_step": 10000,
+      "inference_steps": 4,
+      "seed": 42,
+      "results_dir": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_idnn065_steps4_seed42_20260813/results",
+      "evaluation_dir": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_idnn065_steps4_seed42_20260813/evaluation",
+      "summary_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_idnn065_steps4_seed42_20260813/evaluation/summary.json",
+      "mapping_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_idnn065_steps4_seed42_20260813/evaluation/mapping.json",
+      "manifest_sha256": "ba45dbc7cf479e5a077d21a90ab506f77f6e50978e2c5b93f467519b8c667182",
+      "status": "complete",
+      "notes": "ROI inference; short videos use prefix ping-pong to 81 then trim to source length; output FPS follows source.",
+      "updated_at": "2026-08-14T07:26:21.773311+00:00",
+      "created_at": "2026-08-14T07:26:21.773311+00:00"
+    },
+    {
+      "run_id": "maskroi-gtid-id5-flow10-step25-seed42",
+      "label": "MaskROI GTID id5 flow10 · 25 steps",
+      "group": "GTID",
+      "tags": [
+        "maskroi",
+        "idnn065",
+        "25step",
+        "gtid",
+        "id5"
+      ],
+      "benchmark_mode": "short",
+      "model_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/2026-08-13-dreamidv-maskroi-gtid-id5-flow10-boundary-idnn065-10k-4gpu-gacc2-1k",
+      "model_url": "https://modelscope.cn/models/luozekai/2026-08-13-dreamidv-maskroi-gtid-id5-flow10-boundary-idnn065-10k-4gpu-gacc2-1k",
+      "checkpoint_step": 10000,
+      "inference_steps": 25,
+      "seed": 42,
+      "results_dir": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_gtid_id5_flow10_boundary_idnn065_steps25_seed42_20260814/results",
+      "evaluation_dir": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_gtid_id5_flow10_boundary_idnn065_steps25_seed42_20260814/swapface_benchmark_eval_short",
+      "summary_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_gtid_id5_flow10_boundary_idnn065_steps25_seed42_20260814/swapface_benchmark_eval_short/summary.json",
+      "mapping_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_gtid_id5_flow10_boundary_idnn065_steps25_seed42_20260814/swapface_benchmark_eval_short/mapping.json",
+      "manifest_sha256": "ba45dbc7cf479e5a077d21a90ab506f77f6e50978e2c5b93f467519b8c667182",
+      "status": "complete",
+      "notes": "ROI inference; 4-GPU generation; complete Short 200 benchmark metrics.",
+      "updated_at": "2026-08-14T07:26:22.585416+00:00",
+      "created_at": "2026-08-14T07:26:22.585416+00:00"
+    },
+    {
+      "run_id": "maskroi-gtid-id1-flow20-step25-seed42",
+      "label": "MaskROI GTID id1 flow20 · 25 steps",
+      "group": "GTID",
+      "tags": [
+        "maskroi",
+        "idnn065",
+        "25step",
+        "gtid",
+        "id1"
+      ],
+      "benchmark_mode": "short",
+      "model_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/2026-08-13-dreamidv-maskroi-gtid-id1-flow20-boundary-idnn065-10k-4gpu-gacc2-1k",
+      "model_url": "https://modelscope.cn/models/luozekai/2026-08-13-dreamidv-maskroi-gtid-id1-flow20-boundary-idnn065-10k-4gpu-gacc2-1k",
+      "checkpoint_step": 10000,
+      "inference_steps": 25,
+      "seed": 42,
+      "results_dir": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_gtid_id1_flow20_boundary_idnn065_steps25_seed42_20260814/results",
+      "evaluation_dir": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_gtid_id1_flow20_boundary_idnn065_steps25_seed42_20260814/swapface_benchmark_eval_short",
+      "summary_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_gtid_id1_flow20_boundary_idnn065_steps25_seed42_20260814/swapface_benchmark_eval_short/summary.json",
+      "mapping_path": "/mnt/cpfs/users/lzk/codes/swap_face/idvtrain/output/swapface_short200_maskroi_gtid_id1_flow20_boundary_idnn065_steps25_seed42_20260814/swapface_benchmark_eval_short/mapping.json",
+      "manifest_sha256": "ba45dbc7cf479e5a077d21a90ab506f77f6e50978e2c5b93f467519b8c667182",
+      "status": "partial",
+      "notes": "ROI inference; 4-GPU generation; ID multi-backbone artifact reports 200 failures, so this run is marked partial.",
+      "updated_at": "2026-08-14T07:26:23.756503+00:00",
+      "created_at": "2026-08-14T07:26:23.756503+00:00"
+    }
+  ]
+}
