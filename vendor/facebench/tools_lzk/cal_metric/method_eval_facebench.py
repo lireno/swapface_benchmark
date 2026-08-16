@@ -13,6 +13,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 import os, json, re, tempfile, stat
+import traceback
 from decord import VideoReader, cpu
 import multiprocessing as mp
 import cv2
@@ -23,6 +24,7 @@ import torchvision.transforms.functional as TFF
 
 
 from eval_tools.metrics_calculator_facebench import MetricsCalculator
+from swapface_benchmark.face_boxes import face_box_for_frame, load_ordered_face_boxes, scale_bbox
 
 VIDEO_EXTENSIONS = ('.mp4', '.mov', '.avi', '.mkv')
 PACKAGE_ROOT = str(Path(__file__).resolve().parents[2])
@@ -218,12 +220,12 @@ def find_video_pairs_new(input_dir: str,
     查找视频对，支持新的目录结构
     
     Args:
-        input_dir: 源视频目录（包含source、mask、ref）
+        input_dir: 源视频目录（包含source、face-box JSON、ref）
         use_align: 是否使用对齐数据
         video_num: 最多返回的视频对数量，None表示返回所有找到的视频对
     
     Returns:
-        List of (source_path, mask_path, ref_paths_dict, video_id, video_id)
+        List of (source_path, roi_path, roi_type, ref_paths_dict, video_id, video_id)
         其中 ref_paths_dict = {'sim': path, 'mid': path, 'diff': path}
     """
     pairs = []
@@ -252,8 +254,18 @@ def find_video_pairs_new(input_dir: str,
             
             source_path = os.path.join(root, file)
             
-            # 构建mask路径
+            # 优先直接读取 face-box JSON；旧 mask 视频只作为兼容回退。
+            boxes_path = os.path.join(root, base_name + "_boxes.json")
             mask_path = os.path.join(root, base_name + "_mask.mp4")
+            if os.path.exists(boxes_path):
+                roi_path = boxes_path
+                roi_type = "face_boxes"
+            elif os.path.exists(mask_path):
+                roi_path = mask_path
+                roi_type = "mask_video"
+            else:
+                print(f"Warning: Face-box JSON or mask file not found for {source_path}")
+                continue
             
             # 构建三个ref路径
             ref_paths = {
@@ -265,10 +277,6 @@ def find_video_pairs_new(input_dir: str,
             # 检查所有必需文件是否存在
             if not os.path.exists(source_path):
                 continue
-            if not os.path.exists(mask_path):
-                print(f"Warning: Mask file not found for {source_path}")
-                continue
-            
             # 检查至少一个ref图像存在
             valid_refs = {k: v for k, v in ref_paths.items() if os.path.exists(v)}
             if not valid_refs:
@@ -279,7 +287,7 @@ def find_video_pairs_new(input_dir: str,
             ref_paths = valid_refs
             
             video_id = base_name
-            pairs.append((source_path, mask_path, ref_paths, video_id, video_id))
+            pairs.append((source_path, roi_path, roi_type, ref_paths, video_id, video_id))
             processed_videos.add(base_name)
             
             # 如果设置了视频数量限制且达到限制，提前返回
@@ -322,8 +330,8 @@ def get_corresponding_target_videos_new(source_pairs: List[Tuple],
     target_videos_list = []
     
     for pair in source_pairs:
-        video_id = pair[3]  # base_name (5位数字)
-        ref_paths = pair[2]  # ref_paths_dict
+        video_id = pair[4]  # base_name (5位数字)
+        ref_paths = pair[3]  # ref_paths_dict
         
         target_videos = {}
         
@@ -396,6 +404,26 @@ def calculate_bbox_from_mask(mask_frame: np.ndarray) -> Optional[Tuple[int, int,
     return (x, y, x + w, y + h)
 
 
+def bbox_to_mask(
+    frame_shape: Tuple[int, ...],
+    bbox: Optional[Tuple[float, float, float, float]],
+) -> np.ndarray:
+    """Create the legacy rectangular face mask in memory when a metric needs it."""
+    height, width = frame_shape[:2]
+    mask = np.zeros((height, width, 3), dtype=np.uint8)
+    if bbox is None:
+        return mask
+
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, min(width, int(round(x1))))
+    x2 = max(0, min(width, int(round(x2))))
+    y1 = max(0, min(height, int(round(y1))))
+    y2 = max(0, min(height, int(round(y2))))
+    if x2 > x1 and y2 > y1:
+        mask[y1:y2, x1:x2] = 255
+    return mask
+
+
 def expand_bbox(bbox: Optional[Tuple[int, int, int, int]], 
                frame_shape: Tuple[int, int], 
                expand_ratio: Tuple[float, float, float, float] = (0.5, 0.5, 0.75, 0.25)) -> Optional[Tuple[int, int, int, int]]:
@@ -426,6 +454,8 @@ def crop_face(frame: np.ndarray, bbox: Optional[Tuple[int, int, int, int]]) -> n
         return frame
     
     x_min, y_min, x_max, y_max = bbox
+    if x_max <= x_min or y_max <= y_min:
+        return frame
     face = frame[y_min:y_max, x_min:x_max]
     return face
 
@@ -660,6 +690,7 @@ class ComprehensiveEvaluator:
                 results.append(result)
             except Exception as e:
                 print(f"Error evaluating video {video_data.get('video_id', 'unknown')}: {str(e)}")
+                traceback.print_exc()
                 error_result = {
                     'video_id': video_data.get('video_id', 'unknown'),
                     'error': str(e),
@@ -690,7 +721,8 @@ class ComprehensiveEvaluator:
         # breakpoint()
         source_video_path = video_data['source_video_path']
         target_video_path = video_data['target_video_path']
-        mask_video_path = video_data['mask_video_path']
+        roi_path = video_data['roi_path']
+        roi_type = video_data['roi_type']
         ref_face_path = video_data['ref_face_path']
         video_id = video_data['video_id']
         max_frames = video_data.get('max_frames', None)
@@ -704,7 +736,7 @@ class ComprehensiveEvaluator:
 
 
         # Align evaluation to the generated-video timeline. Training/inference
-        # resizes source and mask videos to 81 frames by linspace downsampling
+        # resizes source videos and face-box timelines to 81 frames by linspace downsampling
         # or last-frame padding; evaluating with raw source indices causes
         # short videos to become empty and long videos to be temporally misaligned.
         source_vr = VideoReader(source_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
@@ -746,18 +778,20 @@ class ComprehensiveEvaluator:
         source_timestamps = source_timestamps
         source_frame_indices = source_frame_indices
         
-        # 提取掩码帧
+        face_boxes = load_ordered_face_boxes(roi_path) if roi_type == "face_boxes" else None
+
+        # 旧 FaceBench 数据可以继续使用 mask 视频；本 benchmark 直接读取 JSON。
         mask_frames = None
         mask_frame_indices = None
-        if mask_video_path and os.path.exists(mask_video_path):
-            mask_vr = VideoReader(mask_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
+        if roi_type == "mask_video" and roi_path and os.path.exists(roi_path):
+            mask_vr = VideoReader(roi_path, ctx=cpu(0), num_threads=mp.cpu_count())
             mask_total_frames = len(mask_vr)
             mask_frame_indices_for_eval = [
                 resize_frame_index(int(i), mask_total_frames, eval_frame_count)
                 for i in eval_frame_indices
             ]
             mask_frames, _, mask_frame_indices = extract_video_frames(
-                mask_video_path, mask_frame_indices_for_eval
+                roi_path, mask_frame_indices_for_eval
             )
             mask_frames = mask_frames
             mask_frame_indices = mask_frame_indices
@@ -770,6 +804,7 @@ class ComprehensiveEvaluator:
         target_frames = target_frames[:min_frames]
         source_frames = source_frames[:min_frames]
         target_frame_indices = target_frame_indices[:min_frames]
+        source_frame_indices = source_frame_indices[:min_frames]
         if mask_frames is not None:
             mask_frames = mask_frames[:min_frames]
         
@@ -809,7 +844,8 @@ class ComprehensiveEvaluator:
                 'frame_indices': []
             }
         
-        # 对齐尺寸
+        # 对齐尺寸。JSON 中的 bbox 属于 resize 前的 source 坐标系。
+        source_frame_shape = source_frames[0].shape[:2]
         if target_frames[0].shape != source_frames[0].shape:
             height, width = target_frames[0].shape[:2]
             source_frames = [cv2.resize(frame, (width, height)) for frame in source_frames]
@@ -817,6 +853,29 @@ class ComprehensiveEvaluator:
         if mask_frames is not None and mask_frames[0].shape != target_frames[0].shape:
             height, width = target_frames[0].shape[:2]
             mask_frames = [cv2.resize(frame, (width, height)) for frame in mask_frames]
+
+        frame_bboxes = []
+        if face_boxes is not None:
+            for source_frame_index, target_frame in zip(source_frame_indices, target_frames):
+                source_bbox = face_box_for_frame(face_boxes, source_frame_index, source_total_frames)
+                frame_bboxes.append(
+                    scale_bbox(source_bbox, source_frame_shape, target_frame.shape[:2])
+                )
+        elif mask_frames is not None:
+            frame_bboxes = [calculate_bbox_from_mask(mask_frame) for mask_frame in mask_frames]
+        else:
+            frame_bboxes = [None] * min_frames
+
+        needs_pixel_masks = (
+            self.config.enable_lpips
+            or self.config.enable_ssim
+            or self.config.enable_warping_error
+        )
+        if face_boxes is not None and needs_pixel_masks:
+            mask_frames = [
+                bbox_to_mask(frame.shape, bbox)
+                for frame, bbox in zip(target_frames, frame_bboxes)
+            ]
         
         # 加载参考人脸图像
         ref_face = Image.open(ref_face_path).convert('RGB')
@@ -826,6 +885,9 @@ class ComprehensiveEvaluator:
             'video_id': video_id,
             'base_video_id': base_video_id,  # 添加基础video_id（不含ref_type后缀）
             'ref_type': ref_type,  # ✅ 添加ref_type字段
+            'roi_type': roi_type,
+            'roi_path': roi_path,
+            'roi_fallback_frames': sum(bbox is None for bbox in frame_bboxes),
             'num_frames': min_frames,
             'face_sim_scores': [],
             'avg_face_sim': None,
@@ -860,7 +922,13 @@ class ComprehensiveEvaluator:
         }
         
         # 处理人脸相关的评估
-        if self.config.enable_face_sim or self.config.enable_pose or self.config.enable_gaze or self.config.enable_id_retrieval:
+        if (
+            self.config.enable_face_sim
+            or self.config.enable_pose
+            or self.config.enable_gaze
+            or self.config.enable_exp_gamma
+            or self.config.enable_id_retrieval
+        ):
             # 过滤有效帧并裁剪人脸
             cropped_target_faces = []
             cropped_source_faces = []
@@ -869,10 +937,7 @@ class ComprehensiveEvaluator:
                 target_frame = target_frames[i]
                 source_frame = source_frames[i]
                 
-                bbox = None
-                if mask_frames is not None:
-                    mask_frame = mask_frames[i]
-                    bbox = calculate_bbox_from_mask(mask_frame)
+                bbox = frame_bboxes[i]
                 
                 if bbox is not None:
                     # 扩展边界框并裁剪人脸
@@ -1079,9 +1144,10 @@ def prepare_video_data(config: EvalConfig) -> dict:
             continue
         
         source_video_path = source_pair[0]
-        mask_video_path = source_pair[1]
-        ref_paths = source_pair[2]
-        video_id = source_pair[3]
+        roi_path = source_pair[1]
+        roi_type = source_pair[2]
+        ref_paths = source_pair[3]
+        video_id = source_pair[4]
         
         # 为每个ref类型创建评估数据
         for ref_type in ref_paths.keys():
@@ -1094,7 +1160,8 @@ def prepare_video_data(config: EvalConfig) -> dict:
                 'ref_type': ref_type,
                 'source_video_path': source_video_path,
                 'target_video_path': target_videos[ref_type],
-                'mask_video_path': mask_video_path,
+                'roi_path': roi_path,
+                'roi_type': roi_type,
                 'ref_face_path': ref_paths[ref_type],
                 'max_frames': config.max_frames,
                 'random_sampling': config.random_sampling
