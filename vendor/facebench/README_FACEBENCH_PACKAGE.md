@@ -36,10 +36,15 @@ Expected source layout:
 ```text
 eval_datas/FaceBench/merge_data_1920/
   00000.mp4
-  00000_mask.mp4
+  00000_boxes.json
   00000_ref_sim.png
   00000_ref_diff.png
 ```
+
+`00000_boxes.json` contains per-frame `[x1, y1, x2, y2]` face boxes. Numeric
+keys are sorted before the boxes are mapped to source-video frames. Legacy
+`00000_mask.mp4` inputs remain supported when the JSON file is absent; metrics
+that require a pixel mask build the same rectangular mask in memory.
 
 ## Run
 

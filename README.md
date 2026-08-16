@@ -111,6 +111,11 @@ outputs/my_method/summary.json
 
 各指标的逐 case 结果也会单独保存在输出目录。
 
+FaceBench 的临时布局会把每个 case 的人脸框直接链接为
+`facebench_layout/source/<video_id>_boxes.json`。评测时按数字键排序读取 bbox，
+再根据 source 与生成视频的相对帧位置和分辨率进行映射；不再生成或解码
+`*_mask.mp4`。旧版 FaceBench 数据中的 mask 视频仍可作为兼容回退。
+
 ## 数据和结果约定
 
 - manifest 中全部媒体路径均相对于 `assets/benchmark/manifest.json`；

@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ASSETS_ROOT="${ASSETS_ROOT:-$ROOT/assets}"
 RESULTS_DIR="${1:?usage: scripts/run_benchmark.sh RESULTS_DIR [OUTPUT_DIR]}"
 OUTPUT_DIR="${2:-$ROOT/outputs/$(date +%Y%m%d_%H%M%S)}"
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 GPU_LIST="${GPU_LIST:-0}"
 NUM_GPUS="${NUM_GPUS:-$(awk -F, '{print NF}' <<<"$GPU_LIST")}"
@@ -12,8 +14,6 @@ SAMPLE_FRAMES="${SAMPLE_FRAMES:-81}"
 LIMIT="${LIMIT:-0}"
 
 export PYTHONPATH="$ROOT:$ROOT/vendor/facebench:${PYTHONPATH:-}"
-mkdir -p "$OUTPUT_DIR"
-
 MAPPING="$OUTPUT_DIR/mapping.json"
 "$PYTHON_BIN" "$ROOT/tools/prepare_results.py" \
   --manifest "$ASSETS_ROOT/benchmark/manifest.json" \
@@ -63,7 +63,9 @@ POSE_MODEL_PATH="$ASSETS_ROOT/models/facebench/hopenet_robust_alpha1.pkl" \
 GAZE_MODEL_PATH="$ASSETS_ROOT/models/facebench/L2CSNet_gaze360.pkl" \
 DEEP3D_CHECKPOINTS_DIR="$ASSETS_ROOT/models/facebench/deep3d/checkpoints" \
 DEEP3D_BFM_FOLDER="$ASSETS_ROOT/models/facebench/deep3d/BFM" \
-  bash "$FACEBENCH_ROOT/scripts_lzk/cal_metric/method_eval_facebench_all.sh"
+  bash "$FACEBENCH_ROOT/scripts_lzk/cal_metric/method_eval_facebench_all.sh" \
+    --max-frames "$SAMPLE_FRAMES" \
+    --no-random-sampling
 
 CUDA_VISIBLE_DEVICES="$GPU_LIST" "$PYTHON_BIN" -m swapface_benchmark.metrics.imaging_quality \
   --mapping "$MAPPING" \
