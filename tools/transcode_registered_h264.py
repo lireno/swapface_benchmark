@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import threading
+import re
 
 import cv2
 
@@ -49,9 +50,25 @@ def info(path: Path) -> tuple[int, float, str, bool]:
     return frames, fps, codec, opened and decoded
 
 
+def browser_compatible(path: Path, ffmpeg: str) -> bool:
+    """Check both the MP4 codec tag and pixel format required by browsers."""
+    result = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", path.as_posix()],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stream = next((line for line in result.stderr.splitlines() if "Video:" in line), "")
+    return bool(
+        re.search(r"Video:\s*h264\b", stream, flags=re.IGNORECASE)
+        and re.search(r"\bavc1\b", stream, flags=re.IGNORECASE)
+        and re.search(r"\byuv420p\b", stream, flags=re.IGNORECASE)
+    )
+
+
 def transcode(path: Path, ffmpeg: str, crf: int) -> tuple[Path, str]:
     before = info(path)
-    if before[2].lower() in {"h264", "avc1"} and before[3]:
+    if before[3] and browser_compatible(path, ffmpeg):
         return path, "already-h264"
     temporary = path.with_suffix(".h264.tmp.mp4")
     temporary.unlink(missing_ok=True)
@@ -68,7 +85,7 @@ def transcode(path: Path, ffmpeg: str, crf: int) -> tuple[Path, str]:
         )
         after = info(temporary)
         tolerance = max(0.01, before[1] * 0.001)
-        if not after[3] or after[2].lower() not in {"h264", "avc1"}:
+        if not after[3] or not browser_compatible(temporary, ffmpeg):
             raise RuntimeError(f"H.264 validation failed: {after}")
         if after[0] != before[0] or abs(after[1] - before[1]) > tolerance:
             raise RuntimeError(f"timeline changed: before={before}, after={after}")

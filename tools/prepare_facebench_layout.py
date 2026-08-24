@@ -5,9 +5,35 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 
 import cv2
 import numpy as np
+
+
+def ffmpeg_executable() -> str:
+    system = shutil.which("ffmpeg")
+    if system:
+        return system
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except (ImportError, RuntimeError) as error:
+        raise RuntimeError("H.264 output requires ffmpeg or imageio-ffmpeg") from error
+
+
+def encode_browser_h264(source: Path, destination: Path) -> None:
+    subprocess.run(
+        [
+            ffmpeg_executable(), "-y", "-hide_banner", "-loglevel", "error",
+            "-i", source.as_posix(), "-map", "0:v:0", "-an",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            destination.as_posix(),
+        ],
+        check=True,
+    )
 
 
 def ensure_link(source: Path, destination: Path) -> None:
@@ -46,8 +72,10 @@ def build_mask_video(video_path: Path, boxes_path: Path, output_path: Path) -> N
     if not boxes:
         raise ValueError(f"empty face boxes: {boxes_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output_path.with_suffix(".frames.tmp.mp4")
+    encoded = output_path.with_suffix(".h264.tmp.mp4")
     writer = cv2.VideoWriter(
-        output_path.as_posix(),
+        temporary.as_posix(),
         cv2.VideoWriter_fourcc(*"mp4v"),
         fps,
         (width, height),
@@ -67,6 +95,12 @@ def build_mask_video(video_path: Path, boxes_path: Path, output_path: Path) -> N
             writer.write(frame)
     finally:
         writer.release()
+    try:
+        encode_browser_h264(temporary, encoded)
+        encoded.replace(output_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+        encoded.unlink(missing_ok=True)
 
 
 def main() -> int:

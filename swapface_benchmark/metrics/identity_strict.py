@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -103,13 +102,22 @@ def read_frames(path: Path, indices: list[int]) -> list[np.ndarray]:
     return frames
 
 
-def sample_eval_indices(eval_frame_count: int, max_frames: int, random_sampling: bool, seed: int) -> list[int]:
-    if max_frames <= 0 or eval_frame_count <= max_frames:
-        return list(range(eval_frame_count))
+def sample_eval_indices(
+    eval_frame_count: int,
+    max_frames: int,
+    random_sampling: bool,
+    seed: int,
+    frame_stride: int = 1,
+) -> list[int]:
+    if frame_stride <= 0:
+        raise ValueError("frame_stride must be positive")
+    candidates = list(range(0, eval_frame_count, frame_stride))
+    if max_frames <= 0 or len(candidates) <= max_frames:
+        return candidates
     if random_sampling:
         np.random.seed(seed)
-        return sorted(int(x) for x in np.random.choice(eval_frame_count, max_frames, replace=False))
-    return list(range(max_frames))
+        return sorted(int(x) for x in np.random.choice(candidates, max_frames, replace=False))
+    return candidates[:max_frames]
 
 
 def calculate_bbox_from_mask(mask_frame: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -299,6 +307,7 @@ def evaluate_case(
     seed: int,
     random_sampling: bool,
     crop_mode: str,
+    frame_stride: int,
 ) -> dict[str, Any]:
     generated_path = Path(item["generated"])
     ref_image_path = Path(item["ref_image"])
@@ -316,7 +325,9 @@ def evaluate_case(
     eval_count = gen_count
     positive_limits = [value for value in (sample_frames, max_eval_frames) if value > 0]
     sample_limit = min(positive_limits) if positive_limits else 0
-    eval_indices = sample_eval_indices(eval_count, sample_limit, random_sampling=random_sampling, seed=seed)
+    eval_indices = sample_eval_indices(
+        eval_count, sample_limit, random_sampling=random_sampling, seed=seed, frame_stride=frame_stride
+    )
     generated_fps = video_fps(generated_path)
     input_fps = video_fps(input_video_path)
     gt_fps = video_fps(gt_video_path)
@@ -411,6 +422,7 @@ def evaluate_case(
         "face_boxes": face_boxes_path.as_posix() if face_boxes_path else None,
         "eval_frame_count": eval_count,
         "sampled_frame_count": min_len,
+        "frame_stride": frame_stride,
         "eval_frame_indices": eval_indices,
         "input_frame_indices": input_indices,
         "ground_truth_frame_indices": gt_indices,
@@ -448,6 +460,7 @@ def summarize(label: str, cases: list[dict[str, Any]], failures: list[dict[str, 
         "max_eval_frames": args.max_eval_frames,
         "sample_frames": args.sample_frames,
         "random_sampling": args.random_sampling,
+        "frame_stride": args.frame_stride,
         "seed": args.seed,
         "case_count": len(cases),
         "failure_count": len(failures),
@@ -476,6 +489,7 @@ def main() -> int:
     parser.add_argument("--det-thresh", type=float, default=0.5)
     parser.add_argument("--max-eval-frames", type=int, default=81)
     parser.add_argument("--sample-frames", type=int, default=16)
+    parser.add_argument("--frame-stride", type=int, default=1)
     parser.add_argument("--crop-mode", choices=("full-frame", "face-box", "mask"), default="full-frame")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--random-sampling", action=argparse.BooleanOptionalAction, default=True)
@@ -483,12 +497,12 @@ def main() -> int:
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--end-index", type=int, default=0)
     args = parser.parse_args()
+    if args.frame_stride <= 0:
+        raise ValueError("frame-stride must be positive")
 
-    if args.device >= 0:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.device)
-        ctx_id = 0
-    else:
-        ctx_id = -1
+    # CUDA visibility is owned by the process launcher.  Rewriting it here
+    # would turn logical device 0 back into physical GPU 0 and break sharding.
+    ctx_id = args.device if args.device >= 0 else -1
 
     mapping = json.loads(Path(args.mapping).read_text(encoding="utf-8"))
     if args.start_index < 0 or args.end_index < 0:
@@ -512,6 +526,7 @@ def main() -> int:
                 args.seed,
                 args.random_sampling,
                 args.crop_mode,
+                args.frame_stride,
             )
             cases.append(case)
             print(

@@ -89,12 +89,17 @@ def musiq_preprocess(frames: list[np.ndarray]) -> torch.Tensor:
 def evaluate_video(
     path: Path, selected: set[str], device: torch.device, batch_size: int,
     musiq: torch.nn.Module | None, dino: torch.nn.Module | None, max_frames: int = 0,
+    frame_stride: int = 1,
 ) -> dict[str, Any]:
+    if frame_stride <= 0:
+        raise ValueError("frame_stride must be positive")
     capture = cv2.VideoCapture(path.as_posix())
     if not capture.isOpened():
         raise RuntimeError(f"failed to open video: {path}")
     declared = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     frame_count = 0
+    decoded_frame_count = 0
+    sampled_frame_indices: list[int] = []
     pair_count = 0
     flicker_sum = 0.0
     previous_frame: np.ndarray | None = None
@@ -127,13 +132,18 @@ def evaluate_video(
 
     try:
         while True:
-            if max_frames > 0 and frame_count >= max_frames:
+            if max_frames > 0 and decoded_frame_count >= max_frames:
                 break
             ok, frame = capture.read()
             if not ok:
                 break
+            source_frame_index = decoded_frame_count
+            decoded_frame_count += 1
+            if source_frame_index % frame_stride != 0:
+                continue
             if frame_count and frame.shape != previous_frame.shape:
-                raise RuntimeError(f"frame shape changed at frame {frame_count}")
+                raise RuntimeError(f"frame shape changed at frame {source_frame_index}")
+            sampled_frame_indices.append(source_frame_index)
             if "temporal_flickering" in selected and previous_frame is not None:
                 flicker_sum += float(np.mean(cv2.absdiff(previous_frame.astype(np.float32), frame.astype(np.float32))))
                 pair_count += 1
@@ -148,10 +158,12 @@ def evaluate_video(
     if frame_count == 0:
         raise RuntimeError("no frames decoded")
     expected = min(declared, max_frames) if declared > 0 and max_frames > 0 else declared
-    if expected > 0 and frame_count != expected:
-        raise RuntimeError(f"decoded {frame_count} frames but container declares {declared}")
+    if expected > 0 and decoded_frame_count != expected:
+        raise RuntimeError(f"decoded {decoded_frame_count} frames but container declares {declared}")
     result: dict[str, Any] = {
         "frame_count": frame_count, "source_frame_count": declared,
+        "decoded_frame_count": decoded_frame_count, "frame_stride": frame_stride,
+        "sampled_frame_indices": sampled_frame_indices,
         "adjacent_pair_count": max(0, frame_count - 1),
     }
     if "imaging_quality" in selected:
@@ -179,11 +191,19 @@ def main() -> int:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-frames", type=int, default=0, help="first N frames; 0 evaluates all frames")
+    parser.add_argument("--frame-stride", type=int, default=1)
+    parser.add_argument("--start-index", type=int, default=0)
+    parser.add_argument("--end-index", type=int, default=0)
     args = parser.parse_args()
+    if args.frame_stride <= 0:
+        raise ValueError("frame-stride must be positive")
     selected = parse_metrics(args.metrics)
     if not selected:
         raise ValueError("no metrics selected")
     mapping = json.loads(args.mapping.read_text(encoding="utf-8"))
+    if args.start_index < 0 or args.end_index < 0 or (args.end_index and args.end_index < args.start_index):
+        raise ValueError("invalid start/end index")
+    mapping = mapping[args.start_index : args.end_index or None]
     device = torch.device(args.device)
     musiq = None
     dino = None
@@ -197,7 +217,10 @@ def main() -> int:
     cases, failures = [], []
     for index, item in enumerate(mapping, 1):
         try:
-            result = evaluate_video(Path(item["generated"]), selected, device, args.batch_size, musiq, dino, args.max_frames)
+            result = evaluate_video(
+                Path(item["generated"]), selected, device, args.batch_size,
+                musiq, dino, args.max_frames, args.frame_stride,
+            )
             cases.append({"case_id": item.get("case_id", item.get("name", str(index))), "video": item["generated"], **result})
         except Exception as error:
             failures.append({"case_id": item.get("case_id", item.get("name", str(index))), "video": item.get("generated"), "error": f"{type(error).__name__}: {error}"})
@@ -212,11 +235,12 @@ def main() -> int:
     payload = {
         "metric": "VBench quality metrics", "selected_metrics": sorted(selected),
         "protocol": {
-            "imaging_quality": "VBench MUSIQ-SPAQ longer-side preprocessing; frame mean per video.",
+            "imaging_quality": "VBench MUSIQ-SPAQ longer-side preprocessing; strided frame mean per video.",
             "subject_consistency": "VBench DINO ViT-B/16: mean of adjacent-frame and first-frame cosine similarities.",
             "temporal_flickering": "VBench adjacent-frame pixel MAE; intended for static videos and not motion compensated.",
             "aggregation": "Per-video macro mean in summary.",
             "max_frames": args.max_frames,
+            "frame_stride": args.frame_stride,
         },
         "mapping": args.mapping.resolve().as_posix(), "models": models,
         "case_count": len(cases), "failure_count": len(failures), "metrics": metrics,

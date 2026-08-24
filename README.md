@@ -23,7 +23,8 @@
 数据分为两套独立协议：
 
 - `short`：使用 `benchmark/non_long_200/manifest.json`。每个输出视频只评测最前面的 `min(总帧数, 81)` 帧，即帧下标 `0..80`；绝不在全片上均匀采样。
-- `long`：使用 `benchmark/manifest.json`，评测输出视频的全部帧。
+- `long`：使用 `benchmark/manifest.json`。ID、FaceBench 属性和 Image Quality 固定取帧下标
+  `0, 10, 20, ...`（`stride=10`）。
 
 long 的筛选过程：从 Part005 随机抽取，按 `(face_box 最后帧号 - 第一帧号) / 25 > 10` 初筛，排除 FPS 大于等于 50 的视频，人工排除 30 个低质量 case，再以随机种子 `20260728` 从剩余 220 个中选择 200 个。按实际 FPS 换算，其中 179 个视频超过 10 秒。
 
@@ -171,7 +172,13 @@ bash scripts/evaluate.sh results --metrics vbench
 默认启用 resume：成功阶段记录输入 mapping 和参数签名，相同配置再次运行会跳过；失败
 阶段不会写成功签名，会在下次自动重试。`--no-resume` 可强制重算。
 
-生成视频是时间基准，原视频和 mask 按实际 FPS 映射。short 只检查并使用生成视频前 81 帧对应的时间窗口；long 检查并使用完整生成视频时间轴。原视频或 mask 无法覆盖实际评测窗口时会写入 `errors.log` 和逐指标失败结果，不再静默截短或末帧补齐。
+`--gpu-list` 同时用于所有 GPU 指标。Identity strict、Identity multi-backbone 和
+VBench 会按 manifest 顺序将 cases 均匀分片，每张物理 GPU 启动一个独立进程，并在
+完成后恢复 manifest 顺序、重新计算全量汇总统计；FaceBench 使用 Ray actor 按 GPU
+分发 batch。例如 `--gpu-list 4,5,6,7` 会让四类指标都使用物理 GPU 4–7，而不是只让
+这些卡可见但仍全部运行在逻辑 `cuda:0`。
+
+生成视频是时间基准，原视频和 mask 按实际 FPS 映射。short 只检查并使用生成视频前 81 帧对应的时间窗口；long 覆盖完整生成视频时间轴，并对所有已选指标每 10 帧取 1 帧。原视频或 mask 无法覆盖实际评测窗口时会写入 `errors.log` 和逐指标失败结果，不再静默截短或末帧补齐。
 
 ### 兼容入口
 
@@ -266,7 +273,7 @@ python -m http.server 8000 --directory web_reports
 
 - manifest 中媒体路径相对于各自的 manifest；
 - `face_boxes.json` 的数字键不要求从 0 开始，按数值排序后的第一项对应视频第 1 帧；
-- short 固定连续取最前面的最多 81 帧，long 连续取全部帧；origin video 和 mask 按实际 FPS 时间戳映射；
+- short 固定连续取最前面的最多 81 帧；long 固定使用 `stride=10`；origin video 和 mask 按实际 FPS 时间戳映射；
 - 所有 ID 模型共享 SCRFD 五点对齐；
 - 模型路径和 SHA256 记录在 [`configs/model_manifest.json`](configs/model_manifest.json)。
 

@@ -12,8 +12,11 @@ import html
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+
+from transcode_registered_h264 import ffmpeg_executable, transcode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -153,6 +156,17 @@ def register(args: argparse.Namespace) -> None:
     for path in (results_dir, summary_path, mapping_path):
         if not path.exists():
             raise FileNotFoundError(path)
+    # Gallery media must be directly playable by browsers. Normalize only files
+    # that are not already H.264/avc1 + yuv420p; transcode() is atomic and also
+    # verifies that frame count and FPS are unchanged.
+    mapping = load_json(mapping_path)
+    generated_videos = sorted({Path(row["generated"]).resolve() for row in mapping})
+    ffmpeg = ffmpeg_executable()
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(generated_videos)))) as executor:
+        futures = {executor.submit(transcode, path, ffmpeg, 18): path for path in generated_videos}
+        for future in as_completed(futures):
+            future.result()
+
     with registry_lock(mode):
         registry = load_json(reg_path)
         manifest_path = Path(registry["manifest"])
@@ -160,7 +174,6 @@ def register(args: argparse.Namespace) -> None:
             raise RuntimeError(f"registered {mode} manifest changed: {manifest_path}")
         manifest = load_json(manifest_path)
         expected = [str(row["case_id"]) for row in manifest["cases"]]
-        mapping = load_json(mapping_path)
         actual = [str(row.get("case_id", row.get("name"))) for row in mapping]
         if actual != expected:
             raise RuntimeError(f"{mode} registration requires the complete ordered manifest: expected {len(expected)} cases, got {len(actual)}")
@@ -264,7 +277,7 @@ function rankings(key){{const m=DATA.metrics.find(x=>x.key===key),xs=DATA.runs.m
 function renderTable(){{const metrics=DATA.metrics.filter(m=>DATA.runs.some(r=>value(r,m.key)!==null));head.innerHTML='<th>显示</th><th>实验</th><th>组</th><th>Steps</th><th>Seed</th><th>状态</th>'+metrics.map(m=>`<th title="${{esc(m.label)}}">${{esc(m.label)}} ${{m.higher?'↑':'↓'}}</th>`).join('');sort.innerHTML='<option value="group">按分组</option>'+metrics.map(m=>`<option value="${{m.key}}">按 ${{esc(m.label)}}</option>`).join('');sort.value=state.sort;const ranks=Object.fromEntries(metrics.map(m=>[m.key,rankings(m.key)]));let rs=[...DATA.runs];if(state.sort!=='group'){{const m=metrics.find(x=>x.key===state.sort);rs.sort((a,b)=>{{const x=value(a,m.key),y=value(b,m.key);if(x===null)return 1;if(y===null)return-1;return m.higher?y-x:x-y}})}}else rs.sort((a,b)=>(a.group||'').localeCompare(b.group||'')||a.label.localeCompare(b.label));runs.innerHTML=rs.map(r=>{{if(state.visible[r.run_id]===undefined)state.visible[r.run_id]=true;const hay=[r.label,r.group,...r.tags].join(' ').toLowerCase(),filtered=state.query&&!hay.includes(state.query.toLowerCase());return `<tr data-id="${{esc(r.run_id)}}" class="${{filtered?'hidden':''}}"><td><input class="toggle" type="checkbox" ${{state.visible[r.run_id]?'checked':''}}></td><td><b>${{esc(r.label)}}</b><details><summary>详情</summary><div>${{esc(r.model_path||r.model_url||'')}}<br>${{esc(r.notes||'')}}<br>${{esc(r.evaluation_dir)}}</div></details></td><td>${{esc(r.group)}}</td><td>${{r.inference_steps??'-'}}</td><td>${{r.seed??'-'}}</td><td><span class="status">${{esc(r.status)}}</span></td>`+metrics.map(m=>{{const rank=ranks[m.key].get(r.run_id),cls=rank===1?'best':rank===2?'second':'';return `<td class="${{cls}}">${{fmt(value(r,m.key),m)}}${{rank?' · #'+rank:''}}</td>`}}).join('')+'</tr>'}}).join('');document.querySelectorAll('.toggle').forEach(x=>x.onchange=()=>{{state.visible[x.closest('tr').dataset.id]=x.checked;save();renderCase()}});save()}}
 function media(label,src,type='video',note=''){{return `<article class="card"><div class="head">${{esc(label)}}</div>${{src?(type==='image'?`<img loading="lazy" src="${{esc(src)}}">`:`<video controls muted loop playsinline preload="metadata" src="${{esc(src)}}"></video>`):'<div class="missing">Missing</div>'}}<div class="small">${{note}}</div></article>`}}
 function renderCase(){{const c=DATA.cases[state.caseIndex];caseTitle.textContent=c.case_id;caseSelect.value=String(state.caseIndex);let cards=media('Reference image',c.ref_image,'image',esc(c.source_identity||''))+media('Origin video',c.origin_video,'video',esc(`${{c.fps||''}} fps`))+media('GAN swapped',c.gan_swapped_video,'video','benchmark baseline');for(const r of DATA.runs)if(state.visible[r.run_id]!==false){{const cm=r.case_metrics[c.case_id]||{{}},note=Object.entries(cm).map(([k,v])=>`${{esc((DATA.metrics.find(m=>m.key===k)||{{label:k}}).label)}} <b>${{Number(v).toFixed((DATA.metrics.find(m=>m.key===k)||{{digits:4}}).digits)}}</b>`).join(' · ')||`steps=${{r.inference_steps??'-'}} · seed=${{r.seed??'-'}}`;cards+=media(r.label,r.videos[c.case_id],'video',note)}}grid.innerHTML=cards;save()}}
-fetch('data.json').then(r=>r.json()).then(d=>{{DATA=d;loadState();state.caseIndex=Math.max(0,Math.min(state.caseIndex,d.cases.length-1));meta.textContent=`${{d.cases.length}} cases · ${{d.runs.length}} registered evals · updated ${{d.generated_at}}`;caseSelect.innerHTML=d.cases.map((c,i)=>`<option value="${{i}}">${{c.case_id}}</option>`).join('');renderTable();renderCase()}}).catch(e=>meta.textContent='加载失败: '+e);
+fetch('data.json',{{cache:'no-store'}}).then(r=>r.json()).then(d=>{{DATA=d;loadState();state.caseIndex=Math.max(0,Math.min(state.caseIndex,d.cases.length-1));meta.textContent=`${{d.cases.length}} cases · ${{d.runs.length}} registered evals · updated ${{d.generated_at}}`;caseSelect.innerHTML=d.cases.map((c,i)=>`<option value="${{i}}">${{c.case_id}}</option>`).join('');renderTable();renderCase()}}).catch(e=>meta.textContent='加载失败: '+e);
 search.oninput=()=>{{state.query=search.value;renderTable()}};sort.onchange=()=>{{state.sort=sort.value;renderTable()}};showAll.onclick=()=>{{DATA.runs.forEach(r=>state.visible[r.run_id]=true);renderTable();renderCase()}};hideAll.onclick=()=>{{DATA.runs.forEach(r=>state.visible[r.run_id]=false);renderTable();renderCase()}};caseSelect.onchange=()=>{{state.caseIndex=+caseSelect.value;renderCase()}};prev.onclick=()=>{{state.caseIndex=(state.caseIndex-1+DATA.cases.length)%DATA.cases.length;renderCase()}};next.onclick=()=>{{state.caseIndex=(state.caseIndex+1)%DATA.cases.length;renderCase()}};play.onclick=()=>document.querySelectorAll('video').forEach(v=>v.play().catch(()=>{{}}));pause.onclick=()=>document.querySelectorAll('video').forEach(v=>v.pause());restart.onclick=()=>document.querySelectorAll('video').forEach(v=>{{v.pause();v.currentTime=0}});
 </script></body></html>'''
 

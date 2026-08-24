@@ -64,6 +64,7 @@ class EvalConfig:
     # max_frames: Optional[int] = None  # 最大帧数
     # max_frames: Optional[int] = 10  # 最大帧数
     max_frames: Optional[int] = int(os.getenv("MAX_EVAL_FRAMES", "0")) or None  # None 表示全测
+    frame_stride: int = int(os.getenv("FRAME_STRIDE", "1"))
     video_num: Optional[int] = None  # 最多处理的视频数量，None表示处理所有视频
     use_align: bool = False  # 是否使用对齐数据
     target_face_type: str = "png"  # 目标人脸图像类型
@@ -697,6 +698,9 @@ class ComprehensiveEvaluator:
         if max_frames is not None and max_frames <= 0:
             max_frames = None
         random_sampling = video_data.get('random_sampling', False)
+        frame_stride = int(video_data.get('frame_stride', 1))
+        if frame_stride <= 0:
+            raise ValueError(f"frame_stride must be positive, got {frame_stride}")
 
         # 获取当前视频的ref_type
         ref_type = video_data.get('ref_type', 'sim')  # 默认sim
@@ -705,27 +709,51 @@ class ComprehensiveEvaluator:
         print(f"Evaluating video: {video_id}")
 
 
-        # The generated video defines the evaluation timeline. Source and mask
-        # frames are selected by timestamp; shorter dependencies are errors.
+        # The generated video defines the evaluation timeline. The optional
+        # linspace_trim_padding mode is used by experiments whose inference
+        # uniformly downsamples long inputs and last-frame-pads short inputs.
         source_vr = VideoReader(source_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
         target_vr = VideoReader(target_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
         source_total_frames = len(source_vr)
         target_total_frames = len(target_vr)
-        eval_frame_count = target_total_frames
         target_fps = float(target_vr.get_avg_fps())
         source_fps = float(source_vr.get_avg_fps())
-        if max_frames is not None and max_frames < eval_frame_count:
+        alignment_mode = os.getenv("FACEBENCH_FRAME_ALIGNMENT", "timestamp_strict")
+        mask_vr = None
+        mask_total_frames = None
+        mask_fps = None
+        if mask_video_path and os.path.exists(mask_video_path):
+            mask_vr = VideoReader(mask_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
+            mask_total_frames = len(mask_vr)
+            mask_fps = float(mask_vr.get_avg_fps())
+        if alignment_mode == "linspace_trim_padding":
+            # Drop generated tail frames that only exist because a short input
+            # was padded. For long inputs, reproduce inference's linspace map.
+            dependency_lengths = [source_total_frames]
+            if mask_total_frames is not None:
+                dependency_lengths.append(mask_total_frames)
+            eval_frame_count = min(target_total_frames, *dependency_lengths)
+        else:
+            eval_frame_count = target_total_frames
+        candidate_frame_indices = np.arange(0, eval_frame_count, frame_stride)
+        if max_frames is not None and max_frames < len(candidate_frame_indices):
             if random_sampling:
                 np.random.seed(42)
-                eval_frame_indices = np.random.choice(eval_frame_count, max_frames, replace=False)
+                eval_frame_indices = np.random.choice(candidate_frame_indices, max_frames, replace=False)
                 eval_frame_indices = np.sort(eval_frame_indices)
             else:
-                eval_frame_indices = np.arange(max_frames)
+                eval_frame_indices = candidate_frame_indices[:max_frames]
         else:
-            eval_frame_indices = np.arange(eval_frame_count)
+            eval_frame_indices = candidate_frame_indices
 
         target_frame_indices = eval_frame_indices.tolist()
-        source_frame_indices_for_eval = [int(round(int(i) / target_fps * source_fps)) for i in eval_frame_indices]
+        if alignment_mode == "linspace_trim_padding":
+            source_frame_indices_for_eval = [
+                resize_frame_index(int(i), source_total_frames, target_total_frames)
+                for i in eval_frame_indices
+            ]
+        else:
+            source_frame_indices_for_eval = [int(round(int(i) / target_fps * source_fps)) for i in eval_frame_indices]
         if source_frame_indices_for_eval and max(source_frame_indices_for_eval) >= source_total_frames:
             raise RuntimeError(
                 f"origin video is shorter than generated timeline: need source frame "
@@ -752,11 +780,14 @@ class ComprehensiveEvaluator:
         # 提取掩码帧
         mask_frames = None
         mask_frame_indices = None
-        if mask_video_path and os.path.exists(mask_video_path):
-            mask_vr = VideoReader(mask_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
-            mask_total_frames = len(mask_vr)
-            mask_fps = float(mask_vr.get_avg_fps())
-            mask_frame_indices_for_eval = [int(round(int(i) / target_fps * mask_fps)) for i in eval_frame_indices]
+        if mask_vr is not None:
+            if alignment_mode == "linspace_trim_padding":
+                mask_frame_indices_for_eval = [
+                    resize_frame_index(int(i), mask_total_frames, target_total_frames)
+                    for i in eval_frame_indices
+                ]
+            else:
+                mask_frame_indices_for_eval = [int(round(int(i) / target_fps * mask_fps)) for i in eval_frame_indices]
             if mask_frame_indices_for_eval and max(mask_frame_indices_for_eval) >= mask_total_frames:
                 raise RuntimeError(
                     f"mask video is shorter than generated timeline: need mask frame "
@@ -863,11 +894,18 @@ class ComprehensiveEvaluator:
             'warping_error_mean_long': None,
             'warping_error_mean_total': None,
             'frame_indices': target_frame_indices,
-            'random_sampling': random_sampling
+            'random_sampling': random_sampling,
+            'frame_stride': frame_stride
         }
         
         # 处理人脸相关的评估
-        if self.config.enable_face_sim or self.config.enable_pose or self.config.enable_gaze or self.config.enable_id_retrieval:
+        if (
+            self.config.enable_face_sim
+            or self.config.enable_pose
+            or self.config.enable_gaze
+            or self.config.enable_exp_gamma
+            or self.config.enable_id_retrieval
+        ):
             # 过滤有效帧并裁剪人脸
             cropped_target_faces = []
             cropped_source_faces = []
@@ -1104,7 +1142,8 @@ def prepare_video_data(config: EvalConfig) -> dict:
                 'mask_video_path': mask_video_path,
                 'ref_face_path': ref_paths[ref_type],
                 'max_frames': config.max_frames,
-                'random_sampling': config.random_sampling
+                'random_sampling': config.random_sampling,
+                'frame_stride': config.frame_stride
             }
             video_data_by_ref[ref_type].append(video_data)
     
@@ -1226,7 +1265,8 @@ def save_results_by_ref(results_by_ref: dict, config: EvalConfig):
                 'enable_exp_gamma': config.enable_exp_gamma,
                 'enable_id_retrieval': config.enable_id_retrieval,
                 'enable_warping_error': config.enable_warping_error,
-                'random_sampling': config.random_sampling
+                'random_sampling': config.random_sampling,
+                'frame_stride': config.frame_stride
             },
             'metrics': {}
         }
@@ -1490,11 +1530,18 @@ def main(config: EvalConfig):
     }
 
     if not ray.is_initialized():
+        ray_temp_dir = os.environ.get(
+            "RAY_TEMP_DIR",
+            f"/tmp/swapface_ray_{os.getpid()}",
+        )
+        os.makedirs(ray_temp_dir, exist_ok=True)
         ray.init(
             include_dashboard=False,
             num_cpus=16,
             num_gpus=config.num_gpus,
             runtime_env={"env_vars": ENV_LIMITS},
+            _temp_dir=ray_temp_dir,
+            _node_ip_address="127.0.0.1",
         )
     
     try:

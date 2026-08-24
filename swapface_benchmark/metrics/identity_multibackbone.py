@@ -82,7 +82,9 @@ class SharedFaceAligner:
         import onnxruntime as ort
         from insightface.model_zoo.scrfd import SCRFD
 
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device >= 0 else ["CPUExecutionProvider"]
+        providers: list[Any] = ["CPUExecutionProvider"]
+        if device >= 0:
+            providers = [("CUDAExecutionProvider", {"device_id": device}), "CPUExecutionProvider"]
         session = ort.InferenceSession(detector_path.as_posix(), providers=providers)
         self.detector = SCRFD(model_file=detector_path.as_posix(), session=session)
         self.detector.prepare(device, input_size=(det_size, det_size), det_thresh=det_thresh)
@@ -134,7 +136,7 @@ class OnnxFaceEncoder:
 
 
 def prepare_generated_frames(
-    item: dict[str, Any], max_eval_frames: int, sample_frames: int, seed: int
+    item: dict[str, Any], max_eval_frames: int, sample_frames: int, seed: int, frame_stride: int
 ) -> tuple[np.ndarray, list[np.ndarray], list[int]]:
     generated_path = Path(item["generated"])
     input_video_path = Path(item["ref_video"])
@@ -145,7 +147,9 @@ def prepare_generated_frames(
     eval_count = generated_count
     positive_limits = [value for value in (sample_frames, max_eval_frames) if value > 0]
     sample_limit = min(positive_limits) if positive_limits else 0
-    eval_indices = sample_eval_indices(eval_count, sample_limit, random_sampling=False, seed=seed)
+    eval_indices = sample_eval_indices(
+        eval_count, sample_limit, random_sampling=False, seed=seed, frame_stride=frame_stride
+    )
     generated_fps = video_fps(generated_path)
     input_fps = video_fps(input_video_path)
     input_indices = [time_aligned_index(index, generated_fps, input_fps, input_count) for index in eval_indices]
@@ -171,7 +175,7 @@ def evaluate_case(
     item: dict[str, Any], aligner: SharedFaceAligner, encoders: dict[str, OnnxFaceEncoder], args: argparse.Namespace
 ) -> dict[str, Any]:
     ref_image, frames, frame_indices = prepare_generated_frames(
-        item, args.max_eval_frames, args.sample_frames, args.seed
+        item, args.max_eval_frames, args.sample_frames, args.seed, args.frame_stride
     )
     aligned_ref = aligner.align(ref_image)
     if aligned_ref is None:
@@ -198,6 +202,7 @@ def evaluate_case(
         "generated": item["generated"],
         "ref_image": item["ref_image"],
         "sampled_frame_count": len(frame_indices),
+        "frame_stride": args.frame_stride,
         "valid_face_frames": len(aligned_frames),
         "valid_frame_indices": valid_indices,
         **metrics,
@@ -217,11 +222,16 @@ def main() -> int:
     parser.add_argument("--det-thresh", type=float, default=0.5)
     parser.add_argument("--max-eval-frames", type=int, default=81)
     parser.add_argument("--sample-frames", type=int, default=81)
+    parser.add_argument("--frame-stride", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--start-index", type=int, default=0)
+    parser.add_argument("--end-index", type=int, default=0)
     parser.add_argument("--metrics", default="id_arc,id_ins,id_cur", help="Comma-separated: id_arc,id_ins,id_cur")
     args = parser.parse_args()
+    if args.frame_stride <= 0:
+        raise ValueError("frame-stride must be positive")
 
     selected = {value.strip().replace("-", "_") for value in args.metrics.split(",") if value.strip()}
     available = {"id_arc": args.id_arc, "id_ins": args.id_ins, "id_cur": args.id_cur}
@@ -234,6 +244,9 @@ def main() -> int:
             raise FileNotFoundError(path)
     mapping_payload = json.loads(args.mapping.read_text(encoding="utf-8"))
     items = mapping_payload["items"] if isinstance(mapping_payload, dict) else mapping_payload
+    if args.start_index < 0 or args.end_index < 0 or (args.end_index and args.end_index < args.start_index):
+        raise ValueError("invalid start/end index")
+    items = items[args.start_index : args.end_index or None]
     if args.limit > 0:
         items = items[: args.limit]
 
@@ -270,6 +283,7 @@ def main() -> int:
             "variance": "population variance of frame-level ID-Arc cosine per video, then mean across videos",
             "sample_frames": args.sample_frames,
             "max_eval_frames": args.max_eval_frames,
+            "frame_stride": args.frame_stride,
         },
         "models": {
             name: {"path": path.resolve().as_posix(), "sha256": sha256(path)} for name, path in model_paths.items()

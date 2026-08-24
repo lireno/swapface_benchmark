@@ -29,6 +29,7 @@ usage() {
 # Usage:
 #   bash scripts/evaluate.sh RESULTS_DIR [options]
 #   --benchmark-mode MODE     short or long (default: short)
+#   --frame-stride N          framewise metric stride (default: short=1, long=10)
 #   --output-dir DIR          default: RESULTS_DIR/benchmark_eval_MODE
 #   --manifest FILE           default: non_long_200/manifest.json for short; manifest.json for long
 #   --origin-dir DIR          override manifest origin videos
@@ -57,6 +58,7 @@ RESULTS_DIR="$1"; shift
 OUTPUT_DIR=""
 MANIFEST=""
 BENCHMARK_MODE="short"
+FRAME_STRIDE=""
 ORIGIN_DIR="$DEFAULT_ORIGIN_DIR"
 MASK_DIR="$DEFAULT_MASK_DIR"
 REF_DIR="$DEFAULT_REF_DIR"
@@ -87,6 +89,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
     --benchmark-mode) BENCHMARK_MODE="$2"; shift 2 ;;
+    --frame-stride) FRAME_STRIDE="$2"; shift 2 ;;
     --manifest) MANIFEST="$2"; shift 2 ;;
     --origin-dir) ORIGIN_DIR="$2"; shift 2 ;;
     --mask-dir) MASK_DIR="$2"; shift 2 ;;
@@ -122,20 +125,28 @@ RESULTS_DIR="$(realpath "$RESULTS_DIR")"
 case "$BENCHMARK_MODE" in
   short)
     EVAL_MAX_FRAMES=81
+    EVAL_FRAME_STRIDE="${FRAME_STRIDE:-1}"
     DEFAULT_MANIFEST="$ASSETS_ROOT/benchmark/non_long_200/manifest.json"
     ;;
   long)
     EVAL_MAX_FRAMES=0
+    EVAL_FRAME_STRIDE="${FRAME_STRIDE:-10}"
     DEFAULT_MANIFEST="$ASSETS_ROOT/benchmark/manifest.json"
     ;;
   *) printf 'Unknown benchmark mode: %s (expected short or long)\n' "$BENCHMARK_MODE" >&2; exit 2 ;;
 esac
+[[ "$EVAL_FRAME_STRIDE" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'Invalid frame stride: %s (expected a positive integer)\n' "$EVAL_FRAME_STRIDE" >&2
+  exit 2
+}
 OUTPUT_DIR="${OUTPUT_DIR:-$RESULTS_DIR/benchmark_eval_$BENCHMARK_MODE}"
 MANIFEST="${MANIFEST:-$DEFAULT_MANIFEST}"
 [[ -f "$MANIFEST" ]] || { printf 'Benchmark manifest not found: %s\n' "$MANIFEST" >&2; exit 2; }
 MANIFEST="$(realpath "$MANIFEST")"
 mkdir -p "$OUTPUT_DIR"
 exec > >(tee -a "$OUTPUT_DIR/evaluation.log") 2>&1
+printf '[protocol] benchmark_mode=%s max_eval_frames=%s frame_stride=%s\n' \
+  "$BENCHMARK_MODE" "$EVAL_MAX_FRAMES" "$EVAL_FRAME_STRIDE"
 NUM_GPUS="${NUM_GPUS:-$(awk -F, '{print NF}' <<<"$GPU_LIST")}" 
 export PYTHONPATH="$ROOT:$ROOT/vendor/facebench:${PYTHONPATH:-}"
 
@@ -240,34 +251,46 @@ MAPPING_HASH="$(sha256sum "$MAPPING" | awk '{print $1}')"
 MANIFEST_HASH="$(sha256sum "$MANIFEST" | awk '{print $1}')"
 
 if has_any id_strict input_leak; then
-  run_stage identity_strict "$BENCHMARK_MODE|$SELECTED|$EVAL_MAX_FRAMES|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$ID_MODELS_DIR" "$OUTPUT_DIR/identity_strict.json" \
-    env CUDA_VISIBLE_DEVICES="$GPU_LIST" "$PYTHON_BIN" -m swapface_benchmark.metrics.identity_strict \
-      --label swapface_benchmark --mapping "$MAPPING" --out "$OUTPUT_DIR/identity_strict.json" \
+  run_stage identity_strict "parallel-v2|$GPU_LIST|$BENCHMARK_MODE|$SELECTED|$EVAL_MAX_FRAMES|$EVAL_FRAME_STRIDE|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$ID_MODELS_DIR" "$OUTPUT_DIR/identity_strict.json" \
+    "$PYTHON_BIN" "$ROOT/tools/run_metric_shards.py" --kind strict --mapping "$MAPPING" \
+      --output "$OUTPUT_DIR/identity_strict.json" --gpu-list "$GPU_LIST" \
+      --shard-dir "$OUTPUT_DIR/shards/identity_strict" -- \
+      "$PYTHON_BIN" -m swapface_benchmark.metrics.identity_strict \
+      --label swapface_benchmark --mapping "$MAPPING" --out '{output}' \
       --models-dir "$ID_MODELS_DIR" --device 0 \
-      --sample-frames "$EVAL_MAX_FRAMES" --max-eval-frames "$EVAL_MAX_FRAMES" --crop-mode face-box --no-random-sampling
+      --sample-frames "$EVAL_MAX_FRAMES" --max-eval-frames "$EVAL_MAX_FRAMES" --frame-stride "$EVAL_FRAME_STRIDE" --crop-mode face-box --no-random-sampling \
+      --start-index '{start}' --end-index '{end}'
 fi
 
 if has_any id_arc id_ins id_cur; then
   MULTI_METRICS=""
   for metric in id_arc id_ins id_cur; do has_metric "$metric" && MULTI_METRICS="${MULTI_METRICS:+$MULTI_METRICS,}$metric"; done
-  run_stage identity_multibackbone "$BENCHMARK_MODE|$MULTI_METRICS|$EVAL_MAX_FRAMES|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$ID_MODELS_DIR|$ARCFACE_MODEL|$CURRICULAR_MODEL" "$OUTPUT_DIR/identity_multibackbone.json" \
-    env CUDA_VISIBLE_DEVICES="$GPU_LIST" "$PYTHON_BIN" -m swapface_benchmark.metrics.identity_multibackbone \
-      --mapping "$MAPPING" --output "$OUTPUT_DIR/identity_multibackbone.json" \
+  run_stage identity_multibackbone "parallel-v2|$GPU_LIST|$BENCHMARK_MODE|$MULTI_METRICS|$EVAL_MAX_FRAMES|$EVAL_FRAME_STRIDE|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$ID_MODELS_DIR|$ARCFACE_MODEL|$CURRICULAR_MODEL" "$OUTPUT_DIR/identity_multibackbone.json" \
+    "$PYTHON_BIN" "$ROOT/tools/run_metric_shards.py" --kind multi --mapping "$MAPPING" \
+      --output "$OUTPUT_DIR/identity_multibackbone.json" --gpu-list "$GPU_LIST" \
+      --shard-dir "$OUTPUT_DIR/shards/identity_multibackbone" -- \
+      "$PYTHON_BIN" -m swapface_benchmark.metrics.identity_multibackbone \
+      --mapping "$MAPPING" --output '{output}' \
       --detector "$ID_MODELS_DIR/scrfd_10g_bnkps.onnx" \
       --id-arc "$ARCFACE_MODEL" --id-ins "$ID_MODELS_DIR/glintr100.onnx" \
       --id-cur "$CURRICULAR_MODEL" \
-      --metrics "$MULTI_METRICS" --device 0 --sample-frames "$EVAL_MAX_FRAMES" --max-eval-frames "$EVAL_MAX_FRAMES" --batch-size 32
+      --metrics "$MULTI_METRICS" --device 0 --sample-frames "$EVAL_MAX_FRAMES" --max-eval-frames "$EVAL_MAX_FRAMES" --frame-stride "$EVAL_FRAME_STRIDE" --batch-size 32 \
+      --start-index '{start}' --end-index '{end}'
 fi
 
 if has_any imaging_quality subject_consistency temporal_flickering; then
   VBENCH_METRICS=""
   for metric in imaging_quality subject_consistency temporal_flickering; do has_metric "$metric" && VBENCH_METRICS="${VBENCH_METRICS:+$VBENCH_METRICS,}$metric"; done
-  run_stage vbench_quality "$BENCHMARK_MODE|$VBENCH_METRICS|$EVAL_MAX_FRAMES|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$MUSIQ_MODEL|$DINO_ROOT" "$OUTPUT_DIR/vbench_quality.json" \
-    env CUDA_VISIBLE_DEVICES="$GPU_LIST" "$PYTHON_BIN" -m swapface_benchmark.metrics.vbench_quality \
-      --mapping "$MAPPING" --output "$OUTPUT_DIR/vbench_quality.json" --metrics "$VBENCH_METRICS" \
+  run_stage vbench_quality "parallel-v2|$GPU_LIST|$BENCHMARK_MODE|$VBENCH_METRICS|$EVAL_MAX_FRAMES|$EVAL_FRAME_STRIDE|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$MUSIQ_MODEL|$DINO_ROOT" "$OUTPUT_DIR/vbench_quality.json" \
+    "$PYTHON_BIN" "$ROOT/tools/run_metric_shards.py" --kind vbench --mapping "$MAPPING" \
+      --output "$OUTPUT_DIR/vbench_quality.json" --gpu-list "$GPU_LIST" \
+      --shard-dir "$OUTPUT_DIR/shards/vbench_quality" -- \
+      "$PYTHON_BIN" -m swapface_benchmark.metrics.vbench_quality \
+      --mapping "$MAPPING" --output '{output}' --metrics "$VBENCH_METRICS" \
       --musiq-model "$MUSIQ_MODEL" \
       --dino-repo "$DINO_CODE_ROOT" \
-      --dino-model "$DINO_ROOT/dino_vitbase16_pretrain.pth" --device cuda:0 --batch-size 8 --max-frames "$EVAL_MAX_FRAMES"
+      --dino-model "$DINO_ROOT/dino_vitbase16_pretrain.pth" --device cuda:0 --batch-size 8 --max-frames "$EVAL_MAX_FRAMES" --frame-stride "$EVAL_FRAME_STRIDE" \
+      --start-index '{start}' --end-index '{end}'
 fi
 
 if has_any face_similarity pose gaze expression lighting; then
@@ -277,7 +300,7 @@ if has_any face_similarity pose gaze expression lighting; then
   has_metric pose || FB_FLAGS+=(--no-enable-pose)
   has_metric gaze || FB_FLAGS+=(--no-enable-gaze)
   has_any expression lighting || FB_FLAGS+=(--no-enable-exp-gamma)
-  FB_SIGNATURE="$BENCHMARK_MODE|$SELECTED|$EVAL_MAX_FRAMES|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$COSFACE_MODEL|$POSE_MODEL|$GAZE_MODEL|$DEEP3D_ROOT"
+  FB_SIGNATURE="$BENCHMARK_MODE|$SELECTED|$EVAL_MAX_FRAMES|$EVAL_FRAME_STRIDE|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$COSFACE_MODEL|$POSE_MODEL|$GAZE_MODEL|$DEEP3D_ROOT"
   if stage_done facebench "$FB_SIGNATURE" "$OUTPUT_DIR/facebench/evaluation_summary_sim.json"; then
     printf '[resume] facebench -> %s\n' "$OUTPUT_DIR/facebench/evaluation_summary_sim.json"
   else
@@ -285,8 +308,9 @@ if has_any face_similarity pose gaze expression lighting; then
     run_stage facebench "$FB_SIGNATURE" "$OUTPUT_DIR/facebench/evaluation_summary_sim.json" \
       env METHOD_NAME=swapface_benchmark SOURCE_VIDEO_DIR="$FACEBENCH_LAYOUT/source" \
         TARGET_VIDEO_DIR="$FACEBENCH_LAYOUT/target" OUTPUT_DIR="$OUTPUT_DIR/facebench" \
+        RAY_TEMP_DIR="${RAY_TEMP_DIR:-/tmp/swapface_ray_$$}" \
         CUDA_VISIBLE_DEVICES="$GPU_LIST" NUM_GPUS="$NUM_GPUS" PYTHON_BIN="$PYTHON_BIN" \
-        MAX_EVAL_FRAMES="$EVAL_MAX_FRAMES" RANDOM_SAMPLING=0 \
+        MAX_EVAL_FRAMES="$EVAL_MAX_FRAMES" FRAME_STRIDE="$EVAL_FRAME_STRIDE" RANDOM_SAMPLING=0 \
         FACE_MODEL_PATH="$COSFACE_MODEL" \
         FACE_DETECT_MODEL_PATH="$(dirname "$ID_MODELS_DIR")" \
         POSE_MODEL_PATH="$POSE_MODEL" GAZE_MODEL_PATH="$GAZE_MODEL" \
@@ -296,7 +320,9 @@ if has_any face_similarity pose gaze expression lighting; then
   fi
 fi
 
-SUMMARY_ARGS=(--input-report "$OUTPUT_DIR/input_report.json" --selected "$SELECTED" --output "$OUTPUT_DIR/summary.json")
+SUMMARY_ARGS=(--input-report "$OUTPUT_DIR/input_report.json" --selected "$SELECTED" \
+  --benchmark-mode "$BENCHMARK_MODE" --max-eval-frames "$EVAL_MAX_FRAMES" \
+  --frame-stride "$EVAL_FRAME_STRIDE" --output "$OUTPUT_DIR/summary.json")
 has_any id_strict input_leak && [[ -s "$OUTPUT_DIR/identity_strict.json" ]] && SUMMARY_ARGS+=(--identity-strict "$OUTPUT_DIR/identity_strict.json")
 has_any id_arc id_ins id_cur && [[ -s "$OUTPUT_DIR/identity_multibackbone.json" ]] && SUMMARY_ARGS+=(--identity-multibackbone "$OUTPUT_DIR/identity_multibackbone.json")
 has_any imaging_quality subject_consistency temporal_flickering && [[ -s "$OUTPUT_DIR/vbench_quality.json" ]] && SUMMARY_ARGS+=(--vbench-quality "$OUTPUT_DIR/vbench_quality.json")

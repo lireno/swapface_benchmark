@@ -20,6 +20,9 @@ def main() -> int:
     parser.add_argument("--imaging-quality", type=Path, help="Legacy standalone imaging-quality artifact")
     parser.add_argument("--input-report", type=Path)
     parser.add_argument("--selected", default="", help="Canonical comma-separated selected metrics")
+    parser.add_argument("--benchmark-mode", choices=("short", "long"))
+    parser.add_argument("--max-eval-frames", type=int, default=0)
+    parser.add_argument("--frame-stride", type=int, default=1)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     sources = {
@@ -84,6 +87,13 @@ def main() -> int:
         "attribute_preservation": {key: value for key, value in flat.items() if key in {"pose_distance", "gaze_l2_distance", "gaze_cosine_similarity", "exp_l2_distance", "gamma_l2_distance"}},
     }
     summary = {
+        "protocol": {
+            "benchmark_mode": args.benchmark_mode,
+            "max_eval_frames": args.max_eval_frames,
+            "frame_stride": args.frame_stride,
+            "frame_indices": f"0,{args.frame_stride},{2 * args.frame_stride},...",
+            "aggregation": "frame mean per case, then equal-weight mean across cases",
+        },
         "case_count": input_report.get("case_count") if input_report else next((value.get("case_count") for value in sources.values() if value), None),
         "failure_count": failures,
         "metrics": {key: value for key, value in grouped.items() if value},
