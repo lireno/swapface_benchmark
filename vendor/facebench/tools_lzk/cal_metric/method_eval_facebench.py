@@ -1254,6 +1254,9 @@ def save_results_by_ref(results_by_ref: dict, config: EvalConfig):
         
         # 计算当前ref类型的统计
         summary = {
+            'metric_protocol_version': 'rgb_landmarks_gaze3d_v2',
+            'gaze_cosine_definition': '3D unit direction cosine from degree angles',
+            'deep3d_landmark_model': os.environ.get('FACEBENCH_LANDMARK_MODEL'),
             'ref_type': ref_type,
             'total_videos': len(results),
             'config': {

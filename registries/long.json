@@ -4,5 +4,31 @@
   "manifest": "/mnt/cpfs/users/lzk/dataset/swapface_benchmark/long_200/benchmark/manifest.json",
   "manifest_sha256": "06002b2ad9cb6444d93594d01f1d6175d857b6376c730179501637934de8b436",
   "case_count": 200,
-  "runs": []
+  "runs": [
+    {
+      "run_id": "livingswap_long",
+      "label": "LivingSwap (long)",
+      "group": "LivingSwap",
+      "tags": [
+        "25step",
+        "1ref",
+        "first-last"
+      ],
+      "benchmark_mode": "long",
+      "model_path": "/mnt/cpfs/users/lzk/models/LivingSwap",
+      "model_url": "https://modelscope.cn/models/luozekai/FaceSwap",
+      "checkpoint_step": null,
+      "inference_steps": 25,
+      "seed": 42,
+      "results_dir": "/mnt/cpfs/users/lzk/codes/swap_face/HiFiVFS_wan/outputs/livingswap_swapface_benchmark/full_4gpu/long/results",
+      "evaluation_dir": "/mnt/cpfs/users/lzk/codes/swap_face/HiFiVFS_wan/outputs/livingswap_swapface_benchmark/full_4gpu/long/benchmark_eval",
+      "summary_path": "/mnt/cpfs/users/lzk/codes/swap_face/HiFiVFS_wan/outputs/livingswap_swapface_benchmark/full_4gpu/long/benchmark_eval/summary.json",
+      "mapping_path": "/mnt/cpfs/users/lzk/codes/swap_face/HiFiVFS_wan/outputs/livingswap_swapface_benchmark/full_4gpu/long/benchmark_eval/mapping.json",
+      "manifest_sha256": "06002b2ad9cb6444d93594d01f1d6175d857b6376c730179501637934de8b436",
+      "status": "complete",
+      "notes": "",
+      "updated_at": "2026-08-31T09:27:24.153690+00:00",
+      "created_at": "2026-08-31T02:25:48.214616+00:00"
+    }
+  ]
 }

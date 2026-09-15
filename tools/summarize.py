@@ -88,6 +88,8 @@ def main() -> int:
     }
     summary = {
         "protocol": {
+            "metric_protocol_version": (facebench or {}).get("metric_protocol_version", "legacy"),
+            "gaze_cosine_definition": (facebench or {}).get("gaze_cosine_definition"),
             "benchmark_mode": args.benchmark_mode,
             "max_eval_frames": args.max_eval_frames,
             "frame_stride": args.frame_stride,

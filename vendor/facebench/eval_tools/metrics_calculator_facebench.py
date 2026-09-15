@@ -345,15 +345,14 @@ class MetricsCalculator:
             self.deep3d_model.parallelize()
             self.deep3d_model.eval()
             
-            # 初始化dlib检测器
-            self.dlib_detector = dlib.get_frontal_face_detector()
-            predictor_path = os.path.join(checkpoints_dir, 'dlib_predictor_recognition/shape_predictor_5_face_landmarks.dat')
-            if os.path.exists(predictor_path):
-                self.dlib_predictor = dlib.shape_predictor(predictor_path)
-            else:
-                print(f"Warning: Dlib predictor not found at {predictor_path}")
-                self.dlib_predictor = None
-            
+            # Standard five points include mouth corners; dlib's five-point model does not.
+            from insightface.model_zoo import get_model
+            landmark_path = os.environ.get('FACEBENCH_LANDMARK_MODEL')
+            if not landmark_path or not os.path.isfile(landmark_path):
+                raise FileNotFoundError('Set FACEBENCH_LANDMARK_MODEL to a local SCRFD/RetinaFace five-point ONNX')
+            self.deep3d_landmark_detector = get_model(landmark_path, providers=['CPUExecutionProvider'])
+            self.deep3d_landmark_detector.prepare(ctx_id=-1, input_size=(640, 640), det_thresh=0.5)
+
             # 加载3D landmarks标准
             self.lm3d_std = load_lm3d(self.opt.bfm_folder)
             
@@ -362,33 +361,17 @@ class MetricsCalculator:
         # print(f"Deep3D face reconstruction model loaded on {get_model_device(self.deep3d_model.net_recon)}")
     
     def detect_landmarks_dlib(self, image):
-        """使用dlib检测5个关键点
-        
-        Args:
-            image: 输入图像，numpy数组 (BGR格式)
-            
-        Returns:
-            landmarks: numpy数组 (5, 2) 或 None
-        """
-        if self.dlib_detector is None or self.dlib_predictor is None:
+        """Compatibility name: return RetinaFace/SCRFD eyes, nose, mouth corners from BGR."""
+        detector = getattr(self, 'deep3d_landmark_detector', None)
+        if detector is None:
+            raise RuntimeError('Deep3D standard-five-point detector was not initialized')
+        boxes, points = detector.detect(image, max_num=1, metric='max')
+        if len(boxes) == 0 or points is None:
             return None
-        
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        faces = self.dlib_detector(gray)
-        
-        if len(faces) == 0:
+        landmarks = np.asarray(points[0], dtype=np.float32)
+        if landmarks.shape != (5, 2) or not np.isfinite(landmarks).all():
             return None
-        
-        # 使用最大的人脸
-        face = max(faces, key=lambda rect: rect.width() * rect.height())
-        landmarks = self.dlib_predictor(gray, face)
-        
-        # 转换为numpy数组 (5个点: 左眼, 右眼, 鼻子, 左嘴角, 右嘴角)
-        points = np.zeros((5, 2), dtype=np.float32)
-        for i in range(5):
-            points[i] = (landmarks.part(i).x, landmarks.part(i).y)
-        
-        return points
+        return landmarks
     
     def preprocess_for_deep3d(self, frame, landmarks):
         """为Deep3D模型预处理帧和关键点
@@ -676,8 +659,7 @@ class MetricsCalculator:
             
         # 转换图像为PIL Image类型
         if isinstance(img, np.ndarray):
-            if img.shape[2] == 3: # 如果是BGR格式（OpenCV格式）
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # FaceBench video readers return RGB arrays.
             img = Image.fromarray(img.astype(np.uint8))
         
         # 转换为模型输入格式并提取姿态
@@ -778,13 +760,14 @@ class MetricsCalculator:
         if self.gaze_model is None:
             raise ValueError("Gaze model not loaded. Call load_gaze_model first.")
         
-        # 转换图像为numpy数组（BGR格式，因为l2cs期望BGR格式）
+        # Public input is RGB. step() with detector expects BGR; predict_gaze() expects RGB.
         if isinstance(img, Image.Image):
-            img = np.array(img)[..., ::-1]  # RGB -> BGR
-        elif isinstance(img, np.ndarray):
-            if img.shape[2] == 3:  # 如果是RGB格式
-                img = img[..., ::-1]  # RGB -> BGR
-        
+            img = np.asarray(img.convert('RGB'))
+        if getattr(self.gaze_model, 'include_detector', True):
+            img = np.ascontiguousarray(img[..., ::-1])
+        else:
+            img = np.ascontiguousarray(img)
+
         # 使用gaze模型进行预测
         try:
             with torch.no_grad():
@@ -830,28 +813,13 @@ class MetricsCalculator:
         return l2_dist
     
     def calculate_gaze_cosine_similarity(self, gaze1, gaze2):
-        """计算两个视线方向向量的余弦相似度
-        
-        Args:
-            gaze1: 第一个视线方向 numpy数组 [pitch, yaw] 或 None
-            gaze2: 第二个视线方向 numpy数组 [pitch, yaw] 或 None
-            
-        Returns:
-            余弦相似度，范围[-1, 1]
-        """
+        """Protocol v2: cosine between 3D unit directions, input angles in degrees."""
         if gaze1 is None or gaze2 is None:
             return None
-        
-        # 计算余弦相似度
-        dot_product = np.dot(gaze1, gaze2)
-        norm1 = np.linalg.norm(gaze1)
-        norm2 = np.linalg.norm(gaze2)
-        
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        
-        similarity = dot_product / (norm1 * norm2)
-        return similarity
+        def direction(gaze):
+            pitch, yaw = np.deg2rad(np.asarray(gaze, dtype=np.float64))
+            return np.array([np.cos(pitch)*np.sin(yaw), np.sin(pitch), np.cos(pitch)*np.cos(yaw)])
+        return float(np.clip(np.dot(direction(gaze1), direction(gaze2)), -1.0, 1.0))
     
     def calculate_face_similarity(self, img1, img2, use_flip=True):
         """计算两张图像的人脸相似度

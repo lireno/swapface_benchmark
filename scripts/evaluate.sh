@@ -300,7 +300,7 @@ if has_any face_similarity pose gaze expression lighting; then
   has_metric pose || FB_FLAGS+=(--no-enable-pose)
   has_metric gaze || FB_FLAGS+=(--no-enable-gaze)
   has_any expression lighting || FB_FLAGS+=(--no-enable-exp-gamma)
-  FB_SIGNATURE="$BENCHMARK_MODE|$SELECTED|$EVAL_MAX_FRAMES|$EVAL_FRAME_STRIDE|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$COSFACE_MODEL|$POSE_MODEL|$GAZE_MODEL|$DEEP3D_ROOT"
+  FB_SIGNATURE="rgb_landmarks_gaze3d_v2|${FACEBENCH_LANDMARK_MODEL:-$ID_MODELS_DIR/scrfd_10g_bnkps.onnx}|$BENCHMARK_MODE|$SELECTED|$EVAL_MAX_FRAMES|$EVAL_FRAME_STRIDE|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$COSFACE_MODEL|$POSE_MODEL|$GAZE_MODEL|$DEEP3D_ROOT"
   if stage_done facebench "$FB_SIGNATURE" "$OUTPUT_DIR/facebench/evaluation_summary_sim.json"; then
     printf '[resume] facebench -> %s\n' "$OUTPUT_DIR/facebench/evaluation_summary_sim.json"
   else
@@ -313,6 +313,7 @@ if has_any face_similarity pose gaze expression lighting; then
         MAX_EVAL_FRAMES="$EVAL_MAX_FRAMES" FRAME_STRIDE="$EVAL_FRAME_STRIDE" RANDOM_SAMPLING=0 \
         FACE_MODEL_PATH="$COSFACE_MODEL" \
         FACE_DETECT_MODEL_PATH="$(dirname "$ID_MODELS_DIR")" \
+        FACEBENCH_LANDMARK_MODEL="${FACEBENCH_LANDMARK_MODEL:-$ID_MODELS_DIR/scrfd_10g_bnkps.onnx}" \
         POSE_MODEL_PATH="$POSE_MODEL" GAZE_MODEL_PATH="$GAZE_MODEL" \
         DEEP3D_CHECKPOINTS_DIR="$DEEP3D_ROOT/checkpoints" \
         DEEP3D_BFM_FOLDER="$DEEP3D_ROOT/BFM" \
