@@ -23,13 +23,13 @@ DINO_CODE_ROOT="$ROOT/vendor/dino"
 usage() {
   sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
   printf '%s\n' "Metric names: id_strict,input_leak,id_arc,id_ins,id_cur,face_similarity,pose,gaze,expression,lighting,imaging_quality,subject_consistency,temporal_flickering"
-  printf '%s\n' "Groups: all,identity,identity_multi,facebench,vbench,temporal"
+  printf '%s\n' "Groups: all,identity,identity_multi,facebench,vbench,temporal,restoration"
 }
 
 # Usage:
 #   bash scripts/evaluate.sh RESULTS_DIR [options]
 #   --benchmark-mode MODE     short or long (default: short)
-#   --frame-stride N          framewise metric stride (default: short=1, long=10)
+#   --frame-stride N          framewise metric stride (default: short=5, long=15)
 #   --output-dir DIR          default: RESULTS_DIR/benchmark_eval_MODE
 #   --manifest FILE           default: non_long_200/manifest.json for short; manifest.json for long
 #   --origin-dir DIR          override manifest origin videos
@@ -125,12 +125,12 @@ RESULTS_DIR="$(realpath "$RESULTS_DIR")"
 case "$BENCHMARK_MODE" in
   short)
     EVAL_MAX_FRAMES=81
-    EVAL_FRAME_STRIDE="${FRAME_STRIDE:-1}"
+    EVAL_FRAME_STRIDE="${FRAME_STRIDE:-5}"
     DEFAULT_MANIFEST="$ASSETS_ROOT/benchmark/non_long_200/manifest.json"
     ;;
   long)
     EVAL_MAX_FRAMES=0
-    EVAL_FRAME_STRIDE="${FRAME_STRIDE:-10}"
+    EVAL_FRAME_STRIDE="${FRAME_STRIDE:-15}"
     DEFAULT_MANIFEST="$ASSETS_ROOT/benchmark/manifest.json"
     ;;
   *) printf 'Unknown benchmark mode: %s (expected short or long)\n' "$BENCHMARK_MODE" >&2; exit 2 ;;
@@ -183,6 +183,7 @@ groups = {
  'all': atomic, 'identity': {'id_strict','input_leak','id_arc','id_ins','id_cur'},
  'identity_multi': {'id_arc','id_ins','id_cur'},
  'facebench': {'face_similarity','pose','gaze','expression','lighting'},
+ 'restoration': {'pose','gaze','expression','lighting'},
  'vbench': {'imaging_quality','subject_consistency','temporal_flickering'},
  'temporal': {'subject_consistency','temporal_flickering'},
 }
@@ -253,6 +254,7 @@ PREPARE_ARGS=(--manifest "$MANIFEST" --results-dir "$RESULTS_DIR" --output "$MAP
 [[ -n "$ORIGIN_DIR" ]] && PREPARE_ARGS+=(--origin-dir "$ORIGIN_DIR")
 [[ -n "$MASK_DIR" ]] && PREPARE_ARGS+=(--mask-dir "$MASK_DIR")
 [[ -n "$REF_DIR" ]] && PREPARE_ARGS+=(--ref-dir "$REF_DIR")
+has_any id_strict input_leak id_arc id_ins id_cur face_similarity || PREPARE_ARGS+=(--no-reference)
 "$PYTHON_BIN" "$ROOT/tools/prepare_results.py" "${PREPARE_ARGS[@]}"
 "$PYTHON_BIN" "$ROOT/tools/validate_mapping.py" --mapping "$MAPPING" --output "$OUTPUT_DIR/input_report.json" --errors "$OUTPUT_DIR/errors.log" --max-frames "$EVAL_MAX_FRAMES" --frame-stride "$EVAL_FRAME_STRIDE"
 MAPPING_HASH="$(sha256sum "$MAPPING" | awk '{print $1}')"

@@ -50,9 +50,8 @@ def main() -> int:
         report: dict[str, Any] = {"case_id": case_id}
         try:
             generated = video_info(Path(item["generated"]))
-            indices = list(range(0, generated["frames"], args.frame_stride))
-            if args.max_frames > 0:
-                indices = indices[:args.max_frames]
+            frame_window = min(generated["frames"], args.max_frames) if args.max_frames > 0 else generated["frames"]
+            indices = list(range(0, frame_window, args.frame_stride))
             evaluated_frames = indices[-1] + 1
             final_time = indices[-1] / generated["fps"]
             generated["evaluated_frames"] = evaluated_frames

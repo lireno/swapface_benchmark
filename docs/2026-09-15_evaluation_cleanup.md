@@ -131,7 +131,7 @@ lighting = coefficients[:, 227:254]    # 27 coefficients
 PYTHONPATH=.:tools python -m pytest -q tests
 ```
 
-28 项通过：原有帧采样、分片合并、gallery 测试，以及新增的 RGB / BGR 契约、五点、三维 gaze cosine、框时间顺序 / 缩放 / 无效值、禁止猜测邻近框、无 GAN 映射与身份计算、顺序解码、缓存失效、缺失阶段失败、输入短一帧失败、CosFace 特征复用与缺测处理。
+31 项通过：原有帧采样、分片合并、gallery 测试，以及新增的 RGB / BGR 契约、五点、三维 gaze cosine、框时间顺序 / 缩放 / 无效值、禁止猜测邻近框、无 GAN 映射与身份计算、顺序解码、缓存失效、缺失阶段失败、输入短一帧失败、CosFace 特征复用与缺测处理。
 Python 编译检查、`bash -n` 和 `git diff --check` 通过。
 
 ### 真实 PPU
@@ -170,7 +170,11 @@ bash scripts/evaluate.sh /path/to/generated_videos \
   --output-dir /path/to/eval_v3 --gpu-list 0,1,2,3
 ```
 
-只算属性：`--metrics pose,gaze,expression,lighting`。
+只算还原性：`--metrics restoration`，等价于 `--metrics pose,gaze,expression,lighting`。跳过 ID、CosFace 相似度、MUSIQ、DINO 和 flickering；不要求参考图存在，也不加载参考图。仍需原视频、生成视频及对应 ROI。
+
+按用户最新要求，默认 short 在前 81 帧窗口抽取 `0,5,...,80`（17 帧），long 全长抽取 `0,15,30,...`。`--frame-stride` 仍可显式覆盖。先限制短视频评测窗口，再执行 stride，不会因步长变大而扩展到 81 帧之后。这个抽帧协议与历史 short stride=1 / long stride=10 不同，做横向表格必须统一抽帧。
+
+新增还原性 smoke 使用 short 默认步长 5；上述全指标三帧 smoke 是显式 stride=40，不是新默认。
 仍然支持显式 `--mask-dir` 覆盖，JSON 与 mask 视频都可用。
 Metric 是独立工作，与训练 / 生成共享已分配卡；外部队列不要把 metric 完成作为下一次训练 / 生成的前置条件。
 
@@ -181,3 +185,7 @@ v2 -> v3：网络颜色和 Deep3D 五点语义相同，但直接 ROI 避免了�
 
 未完成的进一步优化包括：跨 metric 共享 ID 检测、跨实验缓存原视频特征、模型批量推理与全量吞吐评估。
 它们需要完整预处理指纹和数值回归，当前没有用未经验证的缓存替代正确性。
+
+### 最新抽帧 / restoration 验证
+
+CPU 共 31 项通过。对同一 81 帧测试视频，short 默认得到 17 个评测帧 `0,5,...,80`，long 模式默认得到 6 个评测帧 `0,15,...,75`；两次只输出 Pose、Gaze L2 / Cos、Expression、Lighting，失败计数均为 0。long 模式测试 manifest 完全移除参考图与 GAN 字段。该 long smoke 用于验证步长和接口，不是长视频全量评测。

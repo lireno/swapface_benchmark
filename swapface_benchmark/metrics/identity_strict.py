@@ -315,7 +315,7 @@ def evaluate_case(
     gen_count = frame_count(generated_path)
     input_count = frame_count(input_video_path)
     mask_count = frame_count(mask_video_path) if crop_mode == "mask" and mask_is_video else input_count
-    eval_count = gen_count
+    eval_count = min(gen_count, max_eval_frames) if max_eval_frames > 0 else gen_count
     positive_limits = [value for value in (sample_frames, max_eval_frames) if value > 0]
     sample_limit = min(positive_limits) if positive_limits else 0
     eval_indices = sample_eval_indices(

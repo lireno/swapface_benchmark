@@ -1,5 +1,5 @@
 {
-  "cpu_tests_passed": 28,
+  "cpu_tests_passed": 31,
   "real_ppu_smoke": {
     "cases": 1,
     "frame_indices": [
@@ -145,5 +145,62 @@
   "limitations": [
     "single case smoke; not full benchmark",
     "existing environment; fresh installation not tested"
-  ]
+  ],
+  "restoration_smokes": {
+    "short": {
+      "input_frames": 81,
+      "frame_indices": [
+        0,
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40,
+        45,
+        50,
+        55,
+        60,
+        65,
+        70,
+        75,
+        80
+      ],
+      "metrics": [
+        "exp_l2_distance",
+        "gamma_l2_distance",
+        "gaze_cosine_similarity",
+        "gaze_l2_distance",
+        "pose_distance"
+      ],
+      "failure_count": {
+        "facebench": 0,
+        "input_validation": 0
+      }
+    },
+    "long": {
+      "input_frames": 81,
+      "frame_indices": [
+        0,
+        15,
+        30,
+        45,
+        60,
+        75
+      ],
+      "metrics": [
+        "exp_l2_distance",
+        "gamma_l2_distance",
+        "gaze_cosine_similarity",
+        "gaze_l2_distance",
+        "pose_distance"
+      ],
+      "failure_count": {
+        "facebench": 0,
+        "input_validation": 0
+      }
+    }
+  }
 }

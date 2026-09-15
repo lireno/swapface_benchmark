@@ -120,3 +120,33 @@ def test_validation_does_not_allow_one_extra_frame(tmp_path):
         '--output',str(tmp_path/'report.json'),'--errors',str(tmp_path/'errors.log')],capture_output=True)
     assert run.returncode==1
     assert 'ORIGIN_TOO_SHORT' in (tmp_path/'errors.log').read_text()
+
+
+def test_short_stride_five_stays_inside_first_81_frames(tmp_path, monkeypatch):
+    p=tmp_path/'video.mp4';write_video(p,100)
+    ref=tmp_path/'ref.png';cv2.imwrite(str(ref),np.full((32,32,3),100,np.uint8))
+    b=boxes_file(tmp_path,{str(i):[8,8,24,24] for i in range(100)})
+    model=SimpleNamespace(embed=lambda frame:np.array([1.,0.],np.float32))
+    row={'name':'case','facebench_video_id':'00001','generated':str(p),'ref_video':str(p),
+         'ref_image':str(ref),'ref_video_facemask':str(b)}
+    out=strict.evaluate_case(model,row,81,81,42,False,'face-box',5)
+    assert out['eval_frame_indices']==list(range(0,81,5))
+    assert out['sampled_frame_count']==17
+    from swapface_benchmark.metrics.identity_multibackbone import prepare_generated_frames
+    _,frames,indices=prepare_generated_frames(row,81,81,42,5)
+    assert indices==out['eval_frame_indices'] and len(frames)==17
+
+
+def test_long_stride_fifteen():
+    assert strict.sample_eval_indices(46,0,False,42,15)==[0,15,30,45]
+
+
+def test_attribute_mapping_needs_neither_reference_nor_gan(tmp_path):
+    p=tmp_path/'case.mp4';p.touch()
+    b=boxes_file(tmp_path,{'0':[0,0,2,2]})
+    manifest=tmp_path/'manifest.json'
+    manifest.write_text(json.dumps({'cases':[{'case_id':'case','origin_video':str(p),'face_boxes':str(b)}]}))
+    mapping=tmp_path/'mapping.json'
+    subprocess.run([sys.executable,str(ROOT/'tools/prepare_results.py'),'--manifest',str(manifest),
+        '--results-dir',str(tmp_path),'--output',str(mapping),'--no-reference'],check=True,capture_output=True)
+    assert json.loads(mapping.read_text())[0]['ref_image'] is None

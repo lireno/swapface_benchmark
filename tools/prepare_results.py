@@ -40,6 +40,7 @@ def main() -> int:
     parser.add_argument("--origin-dir", type=Path)
     parser.add_argument("--mask-dir", type=Path)
     parser.add_argument("--ref-dir", type=Path)
+    parser.add_argument("--no-reference", action="store_true", help="skip reference images for attribute/quality-only evaluation")
     args = parser.parse_args()
 
     payload = load_json(args.manifest)
@@ -63,10 +64,10 @@ def main() -> int:
         if face_boxes is None:
             raise FileNotFoundError(f"mask/face boxes not found for {case_id} in {args.mask_dir}")
         origin_video = args.origin_dir / f"{case_id}.mp4" if args.origin_dir else resolve_asset(args.manifest, case["origin_video"])
-        ref_image = args.ref_dir / f"{case_id}.jpg" if args.ref_dir else resolve_asset(args.manifest, case["ref_image"])
+        ref_image = None if args.no_reference else (args.ref_dir / f"{case_id}.jpg" if args.ref_dir else resolve_asset(args.manifest, case["ref_image"]))
         if not origin_video.is_file():
             raise FileNotFoundError(origin_video)
-        if not ref_image.is_file():
+        if ref_image is not None and not ref_image.is_file():
             png = ref_image.with_suffix(".png")
             if not png.is_file():
                 raise FileNotFoundError(ref_image)
@@ -75,7 +76,7 @@ def main() -> int:
             **case,
             "name": case_id,
             "facebench_video_id": f"{index:05d}",
-            "ref_image": ref_image.resolve().as_posix(),
+            "ref_image": ref_image.resolve().as_posix() if ref_image is not None else None,
             "ref_video": origin_video.resolve().as_posix(),
             "ref_video_face_boxes": face_boxes.resolve().as_posix(),
             "ref_video_facemask": face_boxes.resolve().as_posix(),

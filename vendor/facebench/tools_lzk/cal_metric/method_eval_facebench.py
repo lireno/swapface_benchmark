@@ -744,6 +744,8 @@ class ComprehensiveEvaluator:
             eval_frame_count = min(target_total_frames, *dependency_lengths)
         else:
             eval_frame_count = target_total_frames
+        if max_frames is not None:
+            eval_frame_count = min(eval_frame_count, max_frames)
         candidate_frame_indices = np.arange(0, eval_frame_count, frame_stride)
         if max_frames is not None and max_frames < len(candidate_frame_indices):
             if random_sampling:
@@ -870,7 +872,7 @@ class ComprehensiveEvaluator:
             mask_frames = [cv2.resize(frame, (width, height), interpolation=cv2.INTER_NEAREST) for frame in mask_frames]
         
         # 加载参考人脸图像
-        ref_face = Image.open(ref_face_path).convert('RGB')
+        ref_face = Image.open(ref_face_path).convert('RGB') if self.config.enable_face_sim else None
         
         # 初始化结果
         result = {

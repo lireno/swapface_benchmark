@@ -174,7 +174,7 @@ bash scripts/evaluate.sh /path/to/results \
 模式和帧协议：
 
 - `--benchmark-mode short` 使用 `benchmark/non_long_200/manifest.json`，连续取输出视频最前面的最多 81 帧；
-- `--benchmark-mode long` 使用 `benchmark/manifest.json`，ID、FaceBench 属性和 Image Quality 固定使用 `stride=10`。
+- `--benchmark-mode long` 使用 `benchmark/manifest.json`，ID、FaceBench 属性和 Image Quality 固定使用 `stride=15`。
 
 默认启用 resume。成功且输入签名一致的阶段会跳过；模式和帧窗口包含在签名中，short 与 long 不会混用缓存。使用 `--no-resume` 强制重算。评测日志、错误记录、各阶段 JSON 和最终 `summary.json` 默认分别写入 `RESULTS_DIR/benchmark_eval_short/` 或 `RESULTS_DIR/benchmark_eval_long/`。
 
