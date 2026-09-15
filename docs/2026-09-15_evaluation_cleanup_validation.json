@@ -1,0 +1,149 @@
+{
+  "cpu_tests_passed": 28,
+  "real_ppu_smoke": {
+    "cases": 1,
+    "frame_indices": [
+      0,
+      40,
+      80
+    ],
+    "gpu": 0,
+    "gan_input": false,
+    "roi": "direct original JSON",
+    "failure_count": {
+      "identity_strict": 0,
+      "identity_multibackbone": 0,
+      "facebench": 0,
+      "vbench_quality": 0,
+      "input_validation": 0
+    },
+    "metrics_flat": {
+      "id_sim": {
+        "mean": 0.6852882504463196,
+        "std": 0.0,
+        "count": 1
+      },
+      "input_leak": {
+        "mean": 0.15399208664894104,
+        "std": 0.0,
+        "count": 1
+      },
+      "id_arc": {
+        "mean": 0.6556753516197205,
+        "std": 0.0,
+        "count": 1
+      },
+      "id_ins": {
+        "mean": 0.6852672696113586,
+        "std": 0.0,
+        "count": 1
+      },
+      "id_cur": {
+        "mean": 0.6728765368461609,
+        "std": 0.0,
+        "count": 1
+      },
+      "face_detection_rate": 1.0,
+      "id_variance": {
+        "mean": 3.2364278013119474e-05,
+        "std": 0.0,
+        "count": 1
+      },
+      "face_similarity": {
+        "valid_videos": 1,
+        "mean": 0.6671039263407389,
+        "std": 0.0,
+        "min": 0.6671039263407389,
+        "max": 0.6671039263407389
+      },
+      "face_similarity_src": {
+        "valid_videos": 1,
+        "mean": 0.08914305518070857,
+        "std": 0.0,
+        "min": 0.08914305518070857,
+        "max": 0.08914305518070857
+      },
+      "pose_distance": {
+        "valid_videos": 1,
+        "mean": 10.453154350907061,
+        "std": 0.0,
+        "min": 10.453154350907061,
+        "max": 10.453154350907061
+      },
+      "gaze_l2_distance": {
+        "valid_videos": 1,
+        "mean": 23.133523720332295,
+        "std": 0.0,
+        "min": 23.133523720332295,
+        "max": 23.133523720332295
+      },
+      "gaze_cosine_similarity": {
+        "valid_videos": 1,
+        "mean": 0.9171351802961123,
+        "std": 0.0,
+        "min": 0.9171351802961123,
+        "max": 0.9171351802961123
+      },
+      "exp_l2_distance": {
+        "valid_videos": 1,
+        "mean": 3.7705671787261963,
+        "std": 0.0,
+        "min": 3.7705671787261963,
+        "max": 3.7705671787261963
+      },
+      "gamma_l2_distance": {
+        "valid_videos": 1,
+        "mean": 0.41973868012428284,
+        "std": 0.0,
+        "min": 0.41973868012428284,
+        "max": 0.41973868012428284
+      },
+      "vbench_subject_consistency": {
+        "mean": 0.8218729197978973,
+        "std": 0.0,
+        "count": 1,
+        "median": 0.8218729197978973,
+        "min": 0.8218729197978973,
+        "max": 0.8218729197978973
+      },
+      "vbench_imaging_quality": {
+        "mean": 0.40953521728515624,
+        "std": 0.0,
+        "count": 1,
+        "median": 0.40953521728515624,
+        "min": 0.40953521728515624,
+        "max": 0.40953521728515624
+      },
+      "raw_musiq_spaq": {
+        "mean": 40.953521728515625,
+        "std": 0.0,
+        "count": 1,
+        "median": 40.953521728515625,
+        "min": 40.953521728515625,
+        "max": 40.953521728515625
+      },
+      "vbench_temporal_flickering": {
+        "mean": 0.9669979675143373,
+        "std": 0.0,
+        "count": 1,
+        "median": 0.9669979675143373,
+        "min": 0.9669979675143373,
+        "max": 0.9669979675143373
+      }
+    }
+  },
+  "deep3d_equivalence": {
+    "mode": "new",
+    "seconds_first_call": 1.2657759543508291,
+    "nvdiffrast_imported": false,
+    "max_abs_diff": {
+      "exp": 0.0,
+      "gamma": 0.0
+    }
+  },
+  "resume": "all four stages skipped without model recomputation",
+  "limitations": [
+    "single case smoke; not full benchmark",
+    "existing environment; fresh installation not tested"
+  ]
+}

@@ -16,12 +16,6 @@ from collections import Counter
 from typing import List, Optional, Tuple
 import cv2
 
-os.environ.setdefault("TORCH_EXTENSIONS_DIR", "/root/humanvid/cache/torch_extensions")
-for _plugin_name in ("nvdiffrast_plugin", "nvdiffrast_plugin_gl"):
-    _plugin_dir = os.path.join(os.environ["TORCH_EXTENSIONS_DIR"], _plugin_name)
-    if _plugin_dir not in sys.path:
-        sys.path.insert(0, _plugin_dir)
-
 # 获取当前文件的目录，用于构建绝对路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
@@ -64,7 +58,7 @@ SHOW_INNER_PROGRESS = False
 
 # ----------- 模块检查 -------------
 try:
-    from models import create_model
+    from models.networks import define_net_recon
 except ImportError as e:
     print("[ImportError] models/create_model 导入失败:", e)
     DEEP3D_AVAILABLE = False
@@ -79,12 +73,6 @@ try:
     from util.preprocess import align_img
 except ImportError as e:
     print("[ImportError] util/preprocess 导入失败:", e)
-    DEEP3D_AVAILABLE = False
-
-try:
-    import dlib
-except ImportError as e:
-    print("[ImportError] dlib 导入失败:", e)
     DEEP3D_AVAILABLE = False
 
 # ----------- 总结 -------------
@@ -173,8 +161,6 @@ class MetricsCalculator:
         # 初始化Deep3DFaceRecon模型
         self.deep3d_model = None
         self.deep3d_model_path = None
-        self.dlib_detector = None
-        self.dlib_predictor = None
         self.lm3d_std = None
     
     def load_face_model(self, model_path):
@@ -213,7 +199,7 @@ class MetricsCalculator:
             model_path: 模型权重路径
         """
         if self.face_detect_align_model is None or model_path != self.face_detect_align_model_path:
-            self.face_detect_align_model = Face_detect_crop(name='antelope', root=model_path)
+            self.face_detect_align_model = Face_detect_crop(name='antelope', root=model_path, detector_path=os.path.join(model_path, 'antelope', 'scrfd_10g_bnkps.onnx'))
             # NOTE 这里的阈值设置得低一些以尽可能地能检测到人脸，但注意不能设成0，要不然box太多numpy后处理会很卡
             self.face_detect_align_model.prepare(ctx_id=0, det_thresh=0.1, det_size=(640,640), mode='None')
             # self.face_detect_align_model.prepare(ctx_id=0, det_thresh=0.01, det_size=(640,640), mode='None')
@@ -275,91 +261,25 @@ class MetricsCalculator:
                     attr_obj.to(self.device)
     
     def load_deep3d_model(self, checkpoints_dir=None, bfm_folder=None):
-        """加载Deep3DFaceRecon模型
-        
-        Args:
-            checkpoints_dir: 模型checkpoint目录路径
-            bfm_folder: BFM模型文件夹路径
-        """
+        """Load only the coefficient network; evaluation never renders a 3D mesh."""
         if not DEEP3D_AVAILABLE:
-            raise ImportError("Deep3DFaceRecon_pytorch not available.")
-        
-        if checkpoints_dir is None:
-            checkpoints_dir = os.path.join(project_root, "eval_tools/third_party/Deep3DFaceRecon_pytorch/checkpoints")
-        if bfm_folder is None:
-            bfm_folder = os.path.join(project_root, "eval_tools/third_party/Deep3DFaceRecon_pytorch/BFM")
-        
-        # 创建选项类
-        class InferenceOptions:
-            def __init__(self):
-                # Basic parameters
-                self.name = 'pretrained'
-                self.model = 'facerecon'
-                self.epoch = '20'
-                self.gpu_ids = '0'
-                self.checkpoints_dir = checkpoints_dir
-                self.bfm_folder = bfm_folder
-                
-                # Model parameters
-                self.net_recon = 'resnet50'
-                self.use_last_fc = False
-                self.bfm_model = 'BFM_model_front.mat'
-                self.phase = 'test'
-                self.dataset_mode = None
-                self.serial_batches = True
-                self.no_flip = True
-                self.init_path = os.path.join(checkpoints_dir, 'init_model/resnet50-0676ba61.pth')
-                
-                # Additional required parameters
-                self.isTrain = False
-                self.use_ddp = False
-                self.verbose = False
-                self.suffix = ''
-                self.vis_batch_nums = 1
-                self.eval_batch_nums = float('inf')
-                self.ddp_port = '12355'
-                self.display_per_batch = True
-                self.add_image = True
-                self.world_size = 1
-                
-                # Face recognition network
-                self.net_recog = 'r50'
-                self.use_crop_face = True
-                self.use_predef_M = False
-                
-                # Renderer parameters
-                self.focal = 1015.
-                self.center = 112.
-                self.camera_d = 10.
-                self.z_near = 5.
-                self.z_far = 15.
-                self.use_opengl = False
-        
+            raise ImportError("Deep3D coefficient network or alignment utilities unavailable")
+        checkpoints_dir = checkpoints_dir or os.path.join(deep3d_path, 'checkpoints')
+        bfm_folder = bfm_folder or os.path.join(deep3d_path, 'BFM')
         if self.deep3d_model is None or checkpoints_dir != self.deep3d_model_path:
-            self.opt = InferenceOptions()
-            
-            # 创建和设置模型
-            self.deep3d_model = create_model(self.opt)
-            self.deep3d_model.setup(self.opt)
-            self.deep3d_model.device = self.device
-            self.deep3d_model.parallelize()
-            self.deep3d_model.eval()
-            
-            # Standard five points include mouth corners; dlib's five-point model does not.
+            checkpoint = torch.load(os.path.join(checkpoints_dir, 'pretrained', 'epoch_20.pth'), map_location='cpu', weights_only=True)
+            network = define_net_recon('resnet50', use_last_fc=False, init_path=None)
+            network.load_state_dict(checkpoint['net_recon'], strict=True)
+            self.deep3d_model = network.to(self.device).eval()
             from insightface.model_zoo import get_model
             landmark_path = os.environ.get('FACEBENCH_LANDMARK_MODEL')
             if not landmark_path or not os.path.isfile(landmark_path):
                 raise FileNotFoundError('Set FACEBENCH_LANDMARK_MODEL to a local SCRFD/RetinaFace five-point ONNX')
             self.deep3d_landmark_detector = get_model(landmark_path, providers=['CPUExecutionProvider'])
             self.deep3d_landmark_detector.prepare(ctx_id=-1, input_size=(640, 640), det_thresh=0.5)
-
-            # 加载3D landmarks标准
-            self.lm3d_std = load_lm3d(self.opt.bfm_folder)
-            
+            self.lm3d_std = load_lm3d(bfm_folder)
             self.deep3d_model_path = checkpoints_dir
-        
-        # print(f"Deep3D face reconstruction model loaded on {get_model_device(self.deep3d_model.net_recon)}")
-    
+
     def detect_landmarks_dlib(self, image):
         """Compatibility name: return RetinaFace/SCRFD eyes, nose, mouth corners from BGR."""
         detector = getattr(self, 'deep3d_landmark_detector', None)
@@ -420,26 +340,16 @@ class MetricsCalculator:
         if self.deep3d_model is None:
             raise ValueError("Deep3D model not loaded. Call load_deep3d_model() first.")
         
-        # 准备数据
-        data = {
-            'imgs': im_tensor.to(self.device),
-            'lms': lm_tensor.to(self.device)
-        }
-        
-        # 推理
-        self.deep3d_model.set_input(data)
-        self.deep3d_model.test()
-        
-        # 获取系数
-        coeffs_dict = self.deep3d_model.pred_coeffs_dict
-        
-        # 转换为numpy
-        coeffs_numpy = {}
-        for key, value in coeffs_dict.items():
-            coeffs_numpy[key] = value.cpu().numpy().flatten()
-        
-        return coeffs_numpy
-    
+        # Exact slices used by ParametricFaceModel.split_coeff, without geometry/rendering.
+        with torch.inference_mode():
+            coefficients = self.deep3d_model(im_tensor.to(self.device))
+        if coefficients.ndim != 2 or coefficients.shape[1] != 257:
+            raise ValueError(f"unexpected Deep3D coefficients: {coefficients.shape}")
+        if not torch.isfinite(coefficients).all():
+            raise ValueError("nonfinite Deep3D coefficients")
+        return {"exp": coefficients[:, 80:144].cpu().numpy().flatten(),
+                "gamma": coefficients[:, 227:254].cpu().numpy().flatten()}
+
     def extract_exp_gamma_from_image(self, img, frame_idx=None):
         """从图像中提取expression和gamma系数
         
@@ -590,13 +500,7 @@ class MetricsCalculator:
         res = self.face_detect_align_model.get(img, crop_size=crop_size)
 
         if res is None:
-            # print("No face detected.")
-            # return None
-            # TODO 优化这种检测不到的情况
-            print("No face detected. use input image instead.")
-            img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            img = img.resize((output_size[1], output_size[0]), Image.BILINEAR)  # PIL的size是(w, h)
-            return img
+            return None
 
         align_img = res[0]
 
@@ -835,13 +739,13 @@ class MetricsCalculator:
         # 检测并对齐人脸
         aligned_face1 = self.detect_and_align_face(img1)
         if aligned_face1 is None:
-            print("No face detected.")
+            return None
         else:
             img1 = aligned_face1
 
         aligned_face2 = self.detect_and_align_face(img2)
         if aligned_face2 is None:
-            print("No face detected.")
+            return None
         else:
             img2 = aligned_face2
 
@@ -917,49 +821,27 @@ class MetricsCalculator:
         
         return avg_l2_dist, gaze_l2_distances, avg_cosine_sim, gaze_cosine_similarities
 
+    def calculate_video_face_similarities(self, video_frames, references, use_flip=True):
+        """Encode each generated face once for all references; missing faces stay missing."""
+        def encode(image):
+            aligned = self.detect_and_align_face(image)
+            return self.extract_face_feature(aligned, use_flip) if aligned is not None else None
+        reference_features = [encode(image) for image in references]
+        scores = [[] for _ in references]
+        for frame in video_frames:
+            feature = encode(frame)
+            for values, reference in zip(scores, reference_features):
+                values.append(self.calculate_cosine_similarity(feature, reference)
+                              if feature is not None and reference is not None else None)
+        results = []
+        for values in scores:
+            valid = [value for value in values if value is not None]
+            results.append((float(np.mean(valid)) if valid else None, values))
+        return results
+
     def calculate_video_face_similarity(self, video_frames, reference_img, use_flip=True):
-        """计算视频中每帧与参考图像的人脸相似度
-        
-        Args:
-            video_frames: 视频帧列表，每个元素为一帧图像
-            reference_img: 参考图像
-            
-        Returns:
-            平均人脸相似度和每一帧的相似度列表
-        """
+        return self.calculate_video_face_similarities(video_frames, [reference_img], use_flip)[0]
 
-        # 检测并对齐人脸
-        aligned_face = self.detect_and_align_face(reference_img)
-        if aligned_face is None:
-            print("No face detected.")
-        else:
-            reference_img = aligned_face
-
-        # 提取参考图像的特征
-        ref_feat = self.extract_face_feature(reference_img, use_flip)
-        
-        similarity_scores = []
-        
-        # 计算每一帧的相似度
-        for i in tqdm(range(len(video_frames)), desc="Calculating face similarity", disable=not SHOW_INNER_PROGRESS):
-            frame = video_frames[i]
-
-            # 检测并对齐人脸
-            aligned_face = self.detect_and_align_face(frame)
-            if aligned_face is None:
-                print("No face detected.")
-            else:
-                frame = aligned_face
-
-            frame_feat = self.extract_face_feature(frame, use_flip)
-            sim_score = self.calculate_cosine_similarity(frame_feat, ref_feat)
-            similarity_scores.append(sim_score)
-        
-        # 计算平均相似度
-        avg_similarity = np.mean(similarity_scores)
-        
-        return avg_similarity, similarity_scores
-    
     def calculate_video_pose_similarity(self, video_frames_pred, video_frames_gt):
         """计算视频中每帧的姿态L2距离
         

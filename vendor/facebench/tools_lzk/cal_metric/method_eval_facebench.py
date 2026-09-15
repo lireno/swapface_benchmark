@@ -23,6 +23,9 @@ import torchvision.transforms.functional as TFF
 
 
 from eval_tools.metrics_calculator_facebench import MetricsCalculator
+from swapface_benchmark.roi import read_face_boxes, scaled_box
+
+DECODE_THREADS = max(1, int(os.environ.get('BENCHMARK_DECODE_THREADS', '2')))
 
 VIDEO_EXTENSIONS = ('.mp4', '.mov', '.avi', '.mkv')
 PACKAGE_ROOT = str(Path(__file__).resolve().parents[2])
@@ -34,6 +37,7 @@ os.environ['RAY_DEDUP_LOGS'] = '0'
 @dataclass
 class EvalConfig:
     """评估配置类"""
+    mapping: str = os.getenv("FACEBENCH_MAPPING", "")
     project_dir: str = PACKAGE_ROOT
     # source_video_dir: str = project_dir + "/eval_datas/FaceBench/merge_data"
     source_video_dir: str = os.getenv("SOURCE_VIDEO_DIR", project_dir + "/eval_datas/FaceBench/merge_data_1920")
@@ -100,7 +104,7 @@ class EvalConfig:
     batch_size: int = 1  # 每个worker处理的视频数量
     
     # Resume参数
-    enable_resume: bool = True  # 是否启用断点续传
+    enable_resume: bool = False  # 是否启用断点续传
     override_existing: bool = False  # 是否覆盖已存在的结果文件
     single_result_dir: str = "single_results"  # 单个视频结果存储目录
 
@@ -254,7 +258,8 @@ def find_video_pairs_new(input_dir: str,
             source_path = os.path.join(root, file)
             
             # 构建mask路径
-            mask_path = os.path.join(root, base_name + "_mask.mp4")
+            boxes_path = os.path.join(root, base_name + "_boxes.json")
+            mask_path = boxes_path if os.path.isfile(boxes_path) else os.path.join(root, base_name + "_mask.mp4")
             
             # 构建三个ref路径
             ref_paths = {
@@ -348,11 +353,11 @@ def get_corresponding_target_videos_new(source_pairs: List[Tuple],
 
 
 
-def extract_video_frames(video_path: str, frame_indices: List[int]) -> Tuple[List[np.ndarray], np.ndarray, List[int]]:
+def extract_video_frames(video_path: str, frame_indices: List[int], reader=None) -> Tuple[List[np.ndarray], np.ndarray, List[int]]:
     # 优先 decord
     try:
         from decord import VideoReader, cpu
-        vr = VideoReader(video_path, ctx=cpu(0), num_threads=mp.cpu_count())
+        vr = reader if reader is not None else VideoReader(video_path, ctx=cpu(0), num_threads=DECODE_THREADS)
         frames = vr.get_batch(frame_indices).asnumpy()  # [N,H,W,C]
         ts = np.array([vr.get_frame_timestamp(i) for i in frame_indices], dtype=np.float32)
         return list(frames), ts, frame_indices
@@ -664,6 +669,7 @@ class ComprehensiveEvaluator:
                 error_result = {
                     'video_id': video_data.get('video_id', 'unknown'),
                     'error': str(e),
+                    'ref_type': video_data.get('ref_type', 'sim'),
                     'face_sim_scores': [],
                     'avg_face_sim': None,
                     'face_sim_contrast_scores': [],
@@ -712,8 +718,8 @@ class ComprehensiveEvaluator:
         # The generated video defines the evaluation timeline. The optional
         # linspace_trim_padding mode is used by experiments whose inference
         # uniformly downsamples long inputs and last-frame-pads short inputs.
-        source_vr = VideoReader(source_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
-        target_vr = VideoReader(target_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
+        source_vr = VideoReader(source_video_path, ctx=cpu(0), num_threads=DECODE_THREADS)
+        target_vr = VideoReader(target_video_path, ctx=cpu(0), num_threads=DECODE_THREADS)
         source_total_frames = len(source_vr)
         target_total_frames = len(target_vr)
         target_fps = float(target_vr.get_avg_fps())
@@ -722,8 +728,11 @@ class ComprehensiveEvaluator:
         mask_vr = None
         mask_total_frames = None
         mask_fps = None
-        if mask_video_path and os.path.exists(mask_video_path):
-            mask_vr = VideoReader(mask_video_path, ctx=cpu(0), num_threads=mp.cpu_count())
+        boxes = read_face_boxes(mask_video_path) if mask_video_path and Path(mask_video_path).suffix.lower() == ".json" else None
+        if boxes is not None and (self.config.enable_lpips or self.config.enable_ssim or self.config.enable_warping_error):
+            raise ValueError("pixel-mask metrics require an explicit mask video; boxes are not segmentation")
+        if mask_video_path and os.path.exists(mask_video_path) and boxes is None:
+            mask_vr = VideoReader(mask_video_path, ctx=cpu(0), num_threads=DECODE_THREADS)
             mask_total_frames = len(mask_vr)
             mask_fps = float(mask_vr.get_avg_fps())
         if alignment_mode == "linspace_trim_padding":
@@ -761,9 +770,12 @@ class ComprehensiveEvaluator:
             )
 
         
+        if boxes is not None and max(source_frame_indices_for_eval, default=-1) >= len(boxes):
+            raise ValueError("face boxes do not cover the evaluated origin-video frames")
+
         # 提取目标视频帧
         target_frames, target_timestamps, target_frame_indices = extract_video_frames(
-            target_video_path, target_frame_indices
+            target_video_path, target_frame_indices, reader=target_vr
         )
         target_frames = target_frames
         target_timestamps = target_timestamps
@@ -771,7 +783,7 @@ class ComprehensiveEvaluator:
         
         # 提取源视频帧
         source_frames, source_timestamps, source_frame_indices = extract_video_frames(
-            source_video_path, source_frame_indices_for_eval
+            source_video_path, source_frame_indices_for_eval, reader=source_vr
         )
         source_frames = source_frames
         source_timestamps = source_timestamps
@@ -794,7 +806,7 @@ class ComprehensiveEvaluator:
                     f"{max(mask_frame_indices_for_eval)}, available={mask_total_frames}"
                 )
             mask_frames, _, mask_frame_indices = extract_video_frames(
-                mask_video_path, mask_frame_indices_for_eval
+                mask_video_path, mask_frame_indices_for_eval, reader=mask_vr
             )
             mask_frames = mask_frames
             mask_frame_indices = mask_frame_indices
@@ -847,6 +859,7 @@ class ComprehensiveEvaluator:
                 'frame_indices': []
             }
         
+        source_shape = source_frames[0].shape[:2]
         # 对齐尺寸
         if target_frames[0].shape != source_frames[0].shape:
             height, width = target_frames[0].shape[:2]
@@ -854,7 +867,7 @@ class ComprehensiveEvaluator:
         
         if mask_frames is not None and mask_frames[0].shape != target_frames[0].shape:
             height, width = target_frames[0].shape[:2]
-            mask_frames = [cv2.resize(frame, (width, height)) for frame in mask_frames]
+            mask_frames = [cv2.resize(frame, (width, height), interpolation=cv2.INTER_NEAREST) for frame in mask_frames]
         
         # 加载参考人脸图像
         ref_face = Image.open(ref_face_path).convert('RGB')
@@ -865,6 +878,9 @@ class ComprehensiveEvaluator:
             'base_video_id': base_video_id,  # 添加基础video_id（不含ref_type后缀）
             'ref_type': ref_type,  # ✅ 添加ref_type字段
             'num_frames': min_frames,
+            'roi_source': 'face_boxes_json' if boxes is not None else 'mask_video',
+            'source_frame_indices': source_frame_indices_for_eval,
+            'metric_protocol_version': 'rgb_landmarks_gaze3d_directroi_v3',
             'face_sim_scores': [],
             'avg_face_sim': None,
             'face_sim_contrast_scores': [],
@@ -915,10 +931,14 @@ class ComprehensiveEvaluator:
                 source_frame = source_frames[i]
                 
                 bbox = None
-                if mask_frames is not None:
+                if boxes is not None:
+                    bbox = scaled_box(boxes[source_frame_indices_for_eval[i]], source_shape, target_frame.shape[:2])
+                elif mask_frames is not None:
                     mask_frame = mask_frames[i]
                     bbox = calculate_bbox_from_mask(mask_frame)
                 
+                if bbox is None:
+                    raise ValueError(f"missing/empty explicit ROI at generated frame {eval_frame_indices[i]}")
                 if bbox is not None:
                     # 扩展边界框并裁剪人脸
                     expanded_bbox = expand_bbox(bbox, target_frame.shape[:2])
@@ -933,29 +953,13 @@ class ComprehensiveEvaluator:
             
             # 计算人脸相似度
             if self.config.enable_face_sim and len(cropped_target_faces) > 0:
-                if os.getenv('RUN_MODE') == 'debug':
-                    breakpoint()
-                
-                # 计算target faces与参考图像的相似度
-                avg_face_sim, face_sim_scores = self.metrics_calculator.calculate_video_face_similarity(
-                    cropped_target_faces, ref_face, use_flip=True
+                similarities = self.metrics_calculator.calculate_video_face_similarities(
+                    cropped_target_faces, [ref_face, cropped_source_faces[0]], use_flip=True
                 )
-                result['face_sim_scores'] = face_sim_scores
-                result['avg_face_sim'] = avg_face_sim
-                
-                # 计算target faces与source faces第一帧的相似度
-                if len(cropped_source_faces) > 0:
-                    source_first_frame = cropped_source_faces[0]
-                    # 将numpy数组转换为PIL Image
-                    if isinstance(source_first_frame, np.ndarray):
-                        source_first_frame = Image.fromarray(source_first_frame.astype(np.uint8))
-                    
-                    avg_face_sim_contrast, face_sim_contrast_scores = self.metrics_calculator.calculate_video_face_similarity(
-                        cropped_target_faces, source_first_frame, use_flip=True
-                    )
-                    result['face_sim_contrast_scores'] = face_sim_contrast_scores
-                    result['avg_face_sim_contrast'] = avg_face_sim_contrast
-            
+                result['avg_face_sim'], result['face_sim_scores'] = similarities[0]
+                result['avg_face_sim_contrast'], result['face_sim_contrast_scores'] = similarities[1]
+                result['face_sim_valid_frames'] = sum(v is not None for v in result['face_sim_scores'])
+
             # 计算姿态距离
             if self.config.enable_pose and len(cropped_target_faces) > 0:
                 avg_pose_l2_dist, pose_l2_distances = self.metrics_calculator.calculate_video_pose_distance(
@@ -1101,6 +1105,17 @@ class ComprehensiveEvaluator:
 def prepare_video_data(config: EvalConfig) -> dict:
     """准备视频数据，按ref类型分组"""
     print("正在查找视频对...")
+    if config.mapping:
+        rows = json.loads(Path(config.mapping).read_text())
+        return {'sim': [{
+            'video_id': f"{row['facebench_video_id']}_sim",
+            'base_video_id': row['facebench_video_id'], 'ref_type': 'sim',
+            'source_video_path': row['ref_video'], 'target_video_path': row['generated'],
+            'mask_video_path': row['ref_video_facemask'], 'ref_face_path': row['ref_image'],
+            'max_frames': config.max_frames, 'random_sampling': config.random_sampling,
+            'frame_stride': config.frame_stride,
+        } for row in rows], 'mid': [], 'diff': []}
+
     source_pairs = find_video_pairs_new(
         config.source_video_dir,
         config.use_align,
@@ -1254,11 +1269,13 @@ def save_results_by_ref(results_by_ref: dict, config: EvalConfig):
         
         # 计算当前ref类型的统计
         summary = {
-            'metric_protocol_version': 'rgb_landmarks_gaze3d_v2',
+            'metric_protocol_version': 'rgb_landmarks_gaze3d_directroi_v3',
             'gaze_cosine_definition': '3D unit direction cosine from degree angles',
             'deep3d_landmark_model': os.environ.get('FACEBENCH_LANDMARK_MODEL'),
             'ref_type': ref_type,
             'total_videos': len(results),
+            'case_count': len(results),
+            'failure_count': sum(bool(row.get('error')) for row in results),
             'config': {
                 'enable_face_sim': config.enable_face_sim,
                 'enable_lpips': config.enable_lpips,
@@ -1410,6 +1427,16 @@ def save_results_by_ref(results_by_ref: dict, config: EvalConfig):
                 'max': float(np.max(all_warping_error_total))
             }
         
+        required_metrics = []
+        for enabled, names in [
+            (config.enable_face_sim, ['face_similarity']),
+            (config.enable_pose, ['pose_distance']),
+            (config.enable_gaze, ['gaze_l2_distance', 'gaze_cosine_similarity']),
+            (config.enable_exp_gamma, ['exp_l2_distance', 'gamma_l2_distance']),
+        ]:
+            if enabled:
+                required_metrics.extend(names)
+        summary['missing_metrics'] = [name for name in required_metrics if name not in summary['metrics']]
         all_summaries[ref_type] = summary
         
         # 保存当前ref类型的汇总结果
@@ -1554,7 +1581,7 @@ def main(config: EvalConfig):
         total_videos = sum(len(v) for v in video_data_by_ref.values())
         if total_videos == 0:
             print("没有找到有效的视频对，退出。")
-            return
+            raise ValueError("no evaluation video pairs")
         
         # 如果启用resume，检查已有结果
         if config.enable_resume:
@@ -1603,11 +1630,20 @@ def main(config: EvalConfig):
         
         # 从单个结果文件中收集所有结果并按ref类型分组
         print("\n正在收集所有结果文件...")
-        all_collected_results_by_ref = collect_all_results_by_ref(config)
+        all_collected_results_by_ref = {key: [] for key in video_data_by_ref}
+        for result in all_results:
+            all_collected_results_by_ref[result.get('ref_type', 'sim')].append(result)
         
         # 保存结果（按ref类型分别保存，并生成总体汇总）
         save_results_by_ref(all_collected_results_by_ref, config)
         
+        if any(result.get("error") for result in all_results):
+            raise RuntimeError("FaceBench cases failed; see per-case errors and failure_count")
+        for ref_type, rows in all_collected_results_by_ref.items():
+            if rows:
+                saved = json.loads(Path(config.output_dir, f'evaluation_summary_{ref_type}.json').read_text())
+                if saved.get('missing_metrics'):
+                    raise RuntimeError(f"selected metrics have no valid results: {saved['missing_metrics']}")
         print("\n评估完成！")
         
     finally:

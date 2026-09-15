@@ -46,6 +46,9 @@ def main() -> int:
     cases = payload["cases"]
     if args.limit > 0:
         cases = cases[: args.limit]
+    ids = [case["case_id"] for case in cases]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate case IDs in manifest")
     mapping: list[dict[str, Any]] = []
     for index, case in enumerate(cases, start=1):
         case_id = case["case_id"]
@@ -76,7 +79,6 @@ def main() -> int:
             "ref_video": origin_video.resolve().as_posix(),
             "ref_video_face_boxes": face_boxes.resolve().as_posix(),
             "ref_video_facemask": face_boxes.resolve().as_posix(),
-            "ground_truth": resolve_asset(args.manifest, case["gan_swapped_video"]).as_posix(),
             "generated": find_generated(args.results_dir, case_id).as_posix(),
         }
         mapping.append(row)

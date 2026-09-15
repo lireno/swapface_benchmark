@@ -27,8 +27,6 @@ python -m pip install --upgrade pip setuptools wheel
 ```bash
 pip install torch==2.9.0 torchvision==0.24.0
 pip install -r requirements.txt
-pip install --no-build-isolation --no-deps \
-  git+https://github.com/NVlabs/nvdiffrast.git@253ac4fcea7de5f396371124af597e6cc957bfae
 ```
 
 `onnxruntime-gpu` 与 NumPy 必须兼容。本项目已验证 NumPy 1.26.4；不要再安装
@@ -45,7 +43,7 @@ CPU 版 `onnxruntime`，否则可能覆盖 GPU 版。如果所用 CUDA/Python �
 - `vendor/dino/`：仅保留 DINO ViT-B/16 所需源码；
 - `tools/`、`scripts/`：输入整理、校验、汇总和一键评测。
 
-模型、BFM 和 dlib predictor 不在 GitHub 源码仓库中。它们必须按下一节目录放置。
+模型资产不在 GitHub 源码仓库中。下节展示历史完整模型包；v3 的 Expression / Lighting 仅需 `epoch_20.pth`、`similarity_Lm3D_all.mat` 和标准五点 ONNX，不需要 dlib predictor、BFM 网格或 nvdiffrast 渲染器。历史包和其 SHA 清单保留兼容。
 
 ## 3. ModelScope 模型包结构
 
@@ -130,7 +128,7 @@ assets/
 
 ```bash
 python - <<'PY'
-import torch, onnxruntime, insightface, dlib, nvdiffrast.torch
+import torch, onnxruntime, insightface
 print('torch:', torch.__version__, 'cuda:', torch.version.cuda)
 print('cuda available:', torch.cuda.is_available())
 print('ORT providers:', onnxruntime.get_available_providers())
@@ -191,7 +189,7 @@ bash scripts/evaluate.sh /path/to/results \
 | `face_similarity` | CosFace |
 | `pose` | Hopenet |
 | `gaze` | L2CS-Net |
-| `expression`, `lighting` | Deep3D checkpoint + BFM + dlib predictor |
+| `expression`, `lighting` | Deep3D net_recon checkpoint + similarity_Lm3D_all.mat + SCRFD/RetinaFace 标准五点 |
 | `imaging_quality` | MUSIQ-SPAQ |
 | `subject_consistency` | DINO ViT-B/16 |
 | `temporal_flickering` | 无模型 |
@@ -201,5 +199,5 @@ bash scripts/evaluate.sh /path/to/results \
 - `No module named models`：应使用当前仓库版本；Deep3D 源码已 vendored，无需从模型目录导入源码。
 - `No module named onnxruntime`：确认正在使用目标虚拟环境，并安装 `onnxruntime-gpu`。
 - NumPy ABI 报错：使用 `numpy==1.26.4`，重新安装与之兼容的 ONNX Runtime。
-- nvdiffrast 构建失败：先安装 PyTorch，再使用 `--no-build-isolation --no-deps` 安装。
+- v3 标准指标路径不需要安装 / 编译 nvdiffrast；只有自行启用完整 Deep3D 渲染时才需要。
 - 原视频或 mask 比结果视频短：评测按设计记入 `errors.log`，不会静默截断。

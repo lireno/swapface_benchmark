@@ -10,6 +10,17 @@
 - 评测模型：<https://www.modelscope.cn/models/luozekai/swapface_benchmark_models>
 - 代码：<https://github.com/lireno/swapface_benchmark>
 
+## 评测实现更新（2026-09-15）
+
+当前协议为 `rgb_landmarks_gaze3d_directroi_v3`。详细修正、兼容性和验证记录见
+[更新记录](docs/2026-09-15_evaluation_cleanup.md)。
+
+- GAN baseline 只是可选展示资源；计算你生成视频的指标不要求它存在，也不解码或评测它。
+- 默认直接读取 manifest 指定的逐帧 `face_boxes` JSON，不生成 mask 视频、不重新检测出一套评测框、不按视频长度插值。
+- 显式提供 mask 视频时，从对应帧的 mask 取框；不自动寻找相邻目录里的其他 JSON。框用于选定人脸区域，ID / Deep3D 所需五点对齐仍会执行。
+- Pose 和 Gaze 的输入颜色已修正；Deep3D 使用标准五点，直接提取系数，不做网格重建和渲染。
+- 旧版属性分数与 v3 不应混用；重算只需要原来的生成视频，不需要重新训练。
+
 ## Benchmark 内容
 
 每个 case 包含：
@@ -17,7 +28,7 @@
 - `ref_image`：需要注入的目标身份参考图；
 - `origin_video`：待换脸视频；
 - `face_boxes`：与 origin video 按顺序对应的人脸框；
-- `gan_swapped_video`：GAN 逐帧换脸 baseline；
+- `gan_swapped_video`：可选的 GAN baseline 展示资源，不是评测 GT 或运行依赖；
 - FPS、face-box 帧范围和时长元数据。
 
 数据分为两套独立协议：
@@ -52,7 +63,6 @@ git clone https://github.com/lireno/swapface_benchmark.git
 cd swapface_benchmark
 pip install -r requirements.txt
 pip install git+https://github.com/edavalosanaya/L2CS-Net.git@main
-pip install git+https://github.com/NVlabs/nvdiffrast.git
 ```
 
 ## 2. 下载数据和模型
@@ -114,7 +124,7 @@ results/
 bash scripts/evaluate.sh /path/to/results --benchmark-mode short
 ```
 
-评测 long 数据（全部帧）：
+评测 long 数据（覆盖完整视频，默认每 10 帧取一帧）：
 
 ```bash
 bash scripts/evaluate.sh /path/to/results --benchmark-mode long
@@ -169,8 +179,9 @@ bash scripts/evaluate.sh results --metrics vbench
 可用分组：`all`、`identity`、`identity_multi`、`facebench`、`vbench`、
 `temporal`。运行 `bash scripts/evaluate.sh --help` 查看全部原子指标。
 
-默认启用 resume：成功阶段记录输入 mapping 和参数签名，相同配置再次运行会跳过；失败
-阶段不会写成功签名，会在下次自动重试。`--no-resume` 可强制重算。
+默认启用 resume：成功阶段记录输入、模型资产、代码和参数签名。代码内容变化，或原路径的视频 / 框 / 模型文件大小或修改时间变化都会使缓存失效。媒体和模型使用 stat 清单，不是每次全量读取大文件做 SHA；请勿保留原大小和 mtime 原位篡改内容。`--no-resume` 可强制重算。
+
+失败阶段不会保留成功签名；重跑前已有汇总移动到 `.previous`，防止失败后误报上次成功结果。输入帧覆盖不足、请求指标缺失或 case 失败会返回非零退出码。部分帧检测不到人脸仍允许作为缺测，不填零。
 
 `--gpu-list` 同时用于所有 GPU 指标。Identity strict、Identity multi-backbone 和
 VBench 会按 manifest 顺序将 cases 均匀分片，每张物理 GPU 启动一个独立进程，并在
@@ -272,10 +283,19 @@ python -m http.server 8000 --directory web_reports
 ## 数据和结果约定
 
 - manifest 中媒体路径相对于各自的 manifest；
-- `face_boxes.json` 的数字键不要求从 0 开始，按数值排序后的第一项对应视频第 1 帧；
+- `face_boxes.json` 的数字键不要求从 0 开始，按数值排序后的第一项对应 origin 视频下标 0（第 1 帧）；坐标为该 origin 视频像素空间的 xyxy。不得把另一段裁剪前视频的框直接用于当前视频；输入覆盖不足或无效框会报错；
 - short 固定连续取最前面的最多 81 帧；long 固定使用 `stride=10`；origin video 和 mask 按实际 FPS 时间戳映射；
 - 所有 ID 模型共享 SCRFD 五点对齐；
 - 模型路径和 SHA256 记录在 [`configs/model_manifest.json`](configs/model_manifest.json)。
+
+CPU 测试：
+
+```bash
+PYTHONPATH=.:tools python -m pytest -q tests
+```
+
+`BENCHMARK_DECODE_THREADS` 控制每个 FaceBench 解码器的线程数（默认 2），避免每个 actor 都启动整机 CPU 数量的解码线程。
+Metric 可以与模型训练 / 视频生成共享已分配的 GPU/PPU；外部实验队列不应等待 metric 完成才开始下一次训练或生成。不要据此假定 metric 不消耗显存。
 
 ## 第三方代码与模型
 

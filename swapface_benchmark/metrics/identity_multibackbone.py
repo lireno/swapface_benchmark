@@ -155,15 +155,27 @@ def prepare_generated_frames(
     input_indices = [time_aligned_index(index, generated_fps, input_fps, input_count) for index in eval_indices]
     face_boxes_path = resolve_face_boxes_path(item, input_video_path, mask_path)
     face_boxes = load_face_boxes(face_boxes_path)
-    if not face_boxes or max(input_indices, default=-1) >= len(face_boxes):
+    if face_boxes_path is not None and (not face_boxes or max(input_indices, default=-1) >= len(face_boxes)):
         raise RuntimeError(
             f"face boxes are shorter than generated timeline: need index {max(input_indices, default=-1)}, "
             f"available={len(face_boxes)}"
         )
+    from swapface_benchmark.metrics.identity_strict import calculate_bbox_from_mask
+    masks = None
+    if face_boxes_path is None:
+        mask_fps, mask_count = video_fps(mask_path), frame_count(mask_path)
+        mask_indices = [time_aligned_index(i, generated_fps, mask_fps, mask_count) for i in eval_indices]
+        masks = read_frames(mask_path, mask_indices)
     frames = read_frames(generated_path, eval_indices)
     cropped = []
-    for frame, input_index in zip(frames, input_indices):
-        bbox = bbox_from_face_boxes(face_boxes, input_index, input_shape, frame.shape[:2])
+    for position, (frame, input_index) in enumerate(zip(frames, input_indices)):
+        if masks is None:
+            bbox = bbox_from_face_boxes(face_boxes, input_index, input_shape, frame.shape[:2])
+        else:
+            mask = cv2.resize(masks[position], (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
+            bbox = calculate_bbox_from_mask(mask)
+            if bbox is None:
+                raise ValueError(f"empty ROI at frame {eval_indices[position]}")
         cropped.append(crop_face(frame, expand_bbox(bbox, frame.shape[:2])))
     ref_image = cv2.imread(item["ref_image"], cv2.IMREAD_COLOR)
     if ref_image is None:

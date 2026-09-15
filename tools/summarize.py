@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -65,8 +66,32 @@ def main() -> int:
         for name in selected:
             permitted.update(aliases.get(name, set()))
         flat = {key: value for key, value in flat.items() if key in permitted}
+    invalid_metrics = []
+    if selected:
+        for key in sorted(permitted):
+            metric = flat.get(key)
+            value = metric.get('mean') if isinstance(metric, dict) else metric
+            if value is None or not math.isfinite(float(value)):
+                invalid_metrics.append(key)
     input_report = load(args.input_report)
     failures = {name: value.get("failure_count", 0) for name, value in sources.items() if value is not None}
+    if invalid_metrics:
+        failures["missing_or_invalid_metrics"] = len(invalid_metrics)
+    if selected:
+        required = {
+            'identity_strict': {'id_strict', 'input_leak'},
+            'identity_multibackbone': {'id_arc', 'id_ins', 'id_cur'},
+            'facebench': {'face_similarity', 'pose', 'gaze', 'expression', 'lighting'},
+            'vbench_quality': {'imaging_quality', 'subject_consistency', 'temporal_flickering'},
+        }
+        for name, metrics in required.items():
+            if selected & metrics and sources[name] is None:
+                failures[name] = 1
+        if input_report:
+            expected = input_report['case_count']
+            for name, source in sources.items():
+                if source is not None and source.get('case_count', source.get('total_videos')) != expected:
+                    failures[name] = max(1, failures.get(name, 0))
     if input_report:
         failures["input_validation"] = input_report.get("error_count", 0)
     artifacts = {
@@ -98,6 +123,7 @@ def main() -> int:
         },
         "case_count": input_report.get("case_count") if input_report else next((value.get("case_count") for value in sources.values() if value), None),
         "failure_count": failures,
+        "missing_or_invalid_metrics": invalid_metrics,
         "metrics": {key: value for key, value in grouped.items() if value},
         "metrics_flat": flat,
         "artifacts": artifacts,
@@ -105,7 +131,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    return 0
+    return 1 if any(failures.values()) else 0
 
 
 if __name__ == "__main__":

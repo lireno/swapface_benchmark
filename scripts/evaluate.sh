@@ -198,11 +198,15 @@ def expand(value):
 print(','.join(sorted(expand(sys.argv[1]) - expand(sys.argv[2]))))
 PY
 )"
+if [[ "${FACEBENCH_FRAME_ALIGNMENT:-timestamp_strict}" != timestamp_strict ]]; then
+  printf '%s\n' 'Use a frame-aligned manifest/adapter; the public evaluator requires timestamp_strict.' >&2
+  exit 2
+fi
 [[ -n "$SELECTED" ]] || { printf '%s\n' 'No metrics remain after exclusions.' >&2; exit 2; }
 has_metric() { [[ ",$SELECTED," == *",$1,"* ]]; }
 has_any() { local name; for name in "$@"; do has_metric "$name" && return 0; done; return 1; }
 require_file() { [[ -f "$1" ]] || { printf 'Required model not found: %s\n' "$1" >&2; exit 2; }; }
-if has_any id_strict input_leak id_arc id_ins id_cur; then
+if has_any id_strict input_leak id_arc id_ins id_cur face_similarity; then
   require_file "$ID_MODELS_DIR/scrfd_10g_bnkps.onnx"
 fi
 has_any id_strict input_leak id_ins && require_file "$ID_MODELS_DIR/glintr100.onnx"
@@ -218,7 +222,8 @@ has_metric pose && require_file "$POSE_MODEL"
 has_metric gaze && require_file "$GAZE_MODEL"
 if has_any expression lighting; then
   require_file "$DEEP3D_ROOT/checkpoints/pretrained/epoch_20.pth"
-  require_file "$DEEP3D_ROOT/BFM/BFM_model_front.mat"
+  require_file "$DEEP3D_ROOT/BFM/similarity_Lm3D_all.mat"
+  require_file "${FACEBENCH_LANDMARK_MODEL:-$ID_MODELS_DIR/scrfd_10g_bnkps.onnx}"
 fi
 
 stage_done() {
@@ -233,6 +238,9 @@ run_stage() {
     printf '[resume] %s -> %s\n' "$stage" "$artifact"
     return 0
   fi
+  rm -f "$OUTPUT_DIR/.${stage}.signature"
+  # Old successful artifacts must not masquerade as this failed attempt.
+  if [[ -f "$artifact" ]]; then mv "$artifact" "$artifact.previous"; fi
   printf '[run] %s\n' "$stage"
   if "$@"; then mark_done "$stage" "$signature"; return 0; fi
   printf '[error] stage %s failed; partial artifact and log are preserved\n' "$stage" >&2
@@ -246,8 +254,11 @@ PREPARE_ARGS=(--manifest "$MANIFEST" --results-dir "$RESULTS_DIR" --output "$MAP
 [[ -n "$MASK_DIR" ]] && PREPARE_ARGS+=(--mask-dir "$MASK_DIR")
 [[ -n "$REF_DIR" ]] && PREPARE_ARGS+=(--ref-dir "$REF_DIR")
 "$PYTHON_BIN" "$ROOT/tools/prepare_results.py" "${PREPARE_ARGS[@]}"
-"$PYTHON_BIN" "$ROOT/tools/validate_mapping.py" --mapping "$MAPPING" --output "$OUTPUT_DIR/input_report.json" --errors "$OUTPUT_DIR/errors.log" --max-frames "$EVAL_MAX_FRAMES"
+"$PYTHON_BIN" "$ROOT/tools/validate_mapping.py" --mapping "$MAPPING" --output "$OUTPUT_DIR/input_report.json" --errors "$OUTPUT_DIR/errors.log" --max-frames "$EVAL_MAX_FRAMES" --frame-stride "$EVAL_FRAME_STRIDE"
 MAPPING_HASH="$(sha256sum "$MAPPING" | awk '{print $1}')"
+RUN_FINGERPRINT="$("$PYTHON_BIN" "$ROOT/tools/evaluation_fingerprint.py" --mapping "$MAPPING" --code-root "$ROOT" "$ID_MODELS_DIR" "$ARCFACE_MODEL" "$CURRICULAR_MODEL" "$COSFACE_MODEL" "$POSE_MODEL" "$GAZE_MODEL" "$DEEP3D_ROOT" "$MUSIQ_MODEL" "$DINO_ROOT" "${FACEBENCH_LANDMARK_MODEL:-$ID_MODELS_DIR/scrfd_10g_bnkps.onnx}")"
+MAPPING_HASH="$MAPPING_HASH|$RUN_FINGERPRINT"
+printf '%s\n' "$RUN_FINGERPRINT" > "$OUTPUT_DIR/evaluation_fingerprint.txt"
 MANIFEST_HASH="$(sha256sum "$MANIFEST" | awk '{print $1}')"
 
 if has_any id_strict input_leak; then
@@ -300,13 +311,12 @@ if has_any face_similarity pose gaze expression lighting; then
   has_metric pose || FB_FLAGS+=(--no-enable-pose)
   has_metric gaze || FB_FLAGS+=(--no-enable-gaze)
   has_any expression lighting || FB_FLAGS+=(--no-enable-exp-gamma)
-  FB_SIGNATURE="rgb_landmarks_gaze3d_v2|${FACEBENCH_LANDMARK_MODEL:-$ID_MODELS_DIR/scrfd_10g_bnkps.onnx}|$BENCHMARK_MODE|$SELECTED|$EVAL_MAX_FRAMES|$EVAL_FRAME_STRIDE|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$COSFACE_MODEL|$POSE_MODEL|$GAZE_MODEL|$DEEP3D_ROOT"
+  FB_SIGNATURE="rgb_landmarks_gaze3d_directroi_v3|${FACEBENCH_LANDMARK_MODEL:-$ID_MODELS_DIR/scrfd_10g_bnkps.onnx}|$BENCHMARK_MODE|$SELECTED|$EVAL_MAX_FRAMES|$EVAL_FRAME_STRIDE|$LIMIT|$MANIFEST_HASH|$MAPPING_HASH|$COSFACE_MODEL|$POSE_MODEL|$GAZE_MODEL|$DEEP3D_ROOT"
   if stage_done facebench "$FB_SIGNATURE" "$OUTPUT_DIR/facebench/evaluation_summary_sim.json"; then
     printf '[resume] facebench -> %s\n' "$OUTPUT_DIR/facebench/evaluation_summary_sim.json"
   else
-    "$PYTHON_BIN" "$ROOT/tools/prepare_facebench_layout.py" --mapping "$MAPPING" --output-root "$FACEBENCH_LAYOUT"
     run_stage facebench "$FB_SIGNATURE" "$OUTPUT_DIR/facebench/evaluation_summary_sim.json" \
-      env METHOD_NAME=swapface_benchmark SOURCE_VIDEO_DIR="$FACEBENCH_LAYOUT/source" \
+      env FACEBENCH_MAPPING="$MAPPING" METHOD_NAME=swapface_benchmark SOURCE_VIDEO_DIR="$FACEBENCH_LAYOUT/source" \
         TARGET_VIDEO_DIR="$FACEBENCH_LAYOUT/target" OUTPUT_DIR="$OUTPUT_DIR/facebench" \
         RAY_TEMP_DIR="${RAY_TEMP_DIR:-/tmp/swapface_ray_$$}" \
         CUDA_VISIBLE_DEVICES="$GPU_LIST" NUM_GPUS="$NUM_GPUS" PYTHON_BIN="$PYTHON_BIN" \

@@ -61,10 +61,10 @@ def _detect_faces(det_model, img, det_thresh, max_num):
 
 
 class Face_detect_crop:
-    def __init__(self, name, root='~/.insightface_func/models'):
+    def __init__(self, name, root='~/.insightface_func/models', detector_path=None):
         self.models = {}
         root = os.path.expanduser(root)
-        onnx_files = glob.glob(osp.join(root, name, '*.onnx'))
+        onnx_files = [detector_path] if detector_path is not None else glob.glob(osp.join(root, name, '*.onnx'))
         onnx_files = sorted(onnx_files)
         for onnx_file in onnx_files:
             if onnx_file.find('_selfgen_')>0:

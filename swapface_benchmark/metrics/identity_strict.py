@@ -92,13 +92,29 @@ def read_frames(path: Path, indices: list[int]) -> list[np.ndarray]:
     if not cap.isOpened():
         raise RuntimeError(f"failed to open video: {path}")
     frames: list[np.ndarray] = []
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            break
-        frames.append(frame)
-    cap.release()
+    next_index = 0
+    previous_index = -1
+    previous_frame = None
+    try:
+        for idx in indices:
+            if idx == previous_index:
+                frames.append(previous_frame.copy())
+                continue
+            if idx < next_index or idx - next_index > 32:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                next_index = idx
+            while next_index < idx:
+                if not cap.grab():
+                    raise RuntimeError(f"incomplete decode before frame {idx}: {path}")
+                next_index += 1
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                raise RuntimeError(f"incomplete decode at frame {idx}: {path}")
+            next_index = idx + 1
+            previous_index, previous_frame = idx, frame
+            frames.append(frame)
+    finally:
+        cap.release()
     return frames
 
 
@@ -136,36 +152,22 @@ def calculate_bbox_from_mask(mask_frame: np.ndarray) -> tuple[int, int, int, int
 def load_face_boxes(path: Path | None) -> dict[int, tuple[float, float, float, float]]:
     if path is None or not path.exists():
         return {}
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    boxes: dict[int, tuple[float, float, float, float]] = {}
-    for index, (_, value) in enumerate(sorted(payload.items(), key=lambda item: int(item[0]))):
-        if not isinstance(value, list) or len(value) < 4:
-            continue
-        boxes[index] = (float(value[0]), float(value[1]), float(value[2]), float(value[3]))
-    return boxes
+    from swapface_benchmark.roi import read_face_boxes
+    return dict(enumerate(read_face_boxes(path)))
 
 
 def resolve_face_boxes_path(item: dict[str, Any], input_video_path: Path, mask_path: Path) -> Path | None:
-    candidates: list[Path] = []
-    for key in ("ref_video_face_boxes", "face_boxes"):
+    """Use only explicitly supplied ROI; never guess a neighbouring face_boxes.json."""
+    for key in ("ref_video_face_boxes", "ref_video_facemask", "face_boxes"):
         if item.get(key):
-            candidates.append(Path(item[key]))
-    if mask_path.suffix.lower() == ".json":
-        candidates.append(mask_path)
-    for key in ("source_mask_path", "ref_video_facemask"):
-        if item.get(key):
-            candidates.append(Path(item[key]).parent / "face_boxes.json")
-    candidates.append(input_video_path.parent / "face_boxes.json")
-
-    seen: set[str] = set()
-    for candidate in candidates:
-        candidate_key = candidate.as_posix()
-        if candidate_key in seen:
-            continue
-        seen.add(candidate_key)
-        if candidate.exists():
-            return candidate
-    return None
+            path = Path(item[key])
+            if path.suffix.lower() == ".json":
+                if not path.is_file():
+                    raise FileNotFoundError(path)
+                return path
+            # An explicit video mask takes precedence over legacy box metadata.
+            return None
+    return mask_path if mask_path.suffix.lower() == ".json" else None
 
 
 def scale_box_to_frame(
@@ -173,17 +175,8 @@ def scale_box_to_frame(
     src_shape: tuple[int, int],
     dst_shape: tuple[int, int],
 ) -> tuple[int, int, int, int]:
-    src_h, src_w = src_shape
-    dst_h, dst_w = dst_shape
-    sx = dst_w / max(float(src_w), 1.0)
-    sy = dst_h / max(float(src_h), 1.0)
-    x_min, y_min, x_max, y_max = box
-    return (
-        int(round(x_min * sx)),
-        int(round(y_min * sy)),
-        int(round(x_max * sx)),
-        int(round(y_max * sy)),
-    )
+    from swapface_benchmark.roi import scaled_box
+    return scaled_box(box, src_shape, dst_shape)
 
 
 def bbox_from_face_boxes(
@@ -195,7 +188,7 @@ def bbox_from_face_boxes(
     if not boxes:
         return None
     if frame_idx not in boxes:
-        frame_idx = min(boxes.keys(), key=lambda key: abs(key - frame_idx))
+        raise ValueError(f"missing face box at position {frame_idx}")
     return scale_box_to_frame(boxes[frame_idx], src_shape, dst_shape)
 
 
@@ -313,15 +306,15 @@ def evaluate_case(
     ref_image_path = Path(item["ref_image"])
     input_video_path = Path(item["ref_video"])
     mask_video_path = Path(item["ref_video_facemask"])
-    gt_video_path = Path(item["ground_truth"])
     mask_is_video = mask_video_path.suffix.lower() != ".json"
     face_boxes_path = resolve_face_boxes_path(item, input_video_path, mask_video_path) if crop_mode == "face-box" else None
+    if crop_mode == "face-box" and mask_is_video and face_boxes_path is None:
+        crop_mode = "mask"
     face_boxes = load_face_boxes(face_boxes_path) if crop_mode == "face-box" else {}
 
     gen_count = frame_count(generated_path)
     input_count = frame_count(input_video_path)
     mask_count = frame_count(mask_video_path) if crop_mode == "mask" and mask_is_video else input_count
-    gt_count = frame_count(gt_video_path)
     eval_count = gen_count
     positive_limits = [value for value in (sample_frames, max_eval_frames) if value > 0]
     sample_limit = min(positive_limits) if positive_limits else 0
@@ -330,9 +323,7 @@ def evaluate_case(
     )
     generated_fps = video_fps(generated_path)
     input_fps = video_fps(input_video_path)
-    gt_fps = video_fps(gt_video_path)
     input_indices = [time_aligned_index(idx, generated_fps, input_fps, input_count) for idx in eval_indices]
-    gt_indices = [time_aligned_index(idx, generated_fps, gt_fps, gt_count) for idx in eval_indices]
     if crop_mode == "mask" and mask_is_video:
         mask_fps = video_fps(mask_video_path)
         mask_indices = [time_aligned_index(idx, generated_fps, mask_fps, mask_count) for idx in eval_indices]
@@ -354,28 +345,23 @@ def evaluate_case(
     gen_frames = read_frames(generated_path, eval_indices)
     input_frames = read_frames(input_video_path, input_indices)
     mask_frames = read_frames(mask_video_path, mask_indices) if crop_mode == "mask" and mask_is_video else [None] * len(eval_indices)
-    gt_frames = read_frames(gt_video_path, gt_indices)
-    min_len = min(len(gen_frames), len(input_frames), len(mask_frames), len(gt_frames))
+    min_len = min(len(gen_frames), len(input_frames), len(mask_frames))
     gen_frames = gen_frames[:min_len]
     input_frames = input_frames[:min_len]
     mask_frames = mask_frames[:min_len]
-    gt_frames = gt_frames[:min_len]
     eval_indices = eval_indices[:min_len]
     input_indices = input_indices[:min_len]
     mask_indices = mask_indices[:min_len]
-    gt_indices = gt_indices[:min_len]
 
     cropped_gen: list[np.ndarray] = []
     cropped_input: list[np.ndarray] = []
-    cropped_gt: list[np.ndarray] = []
     bbox_source = "full_frame_largest_face"
-    for pos, (gen_frame, input_frame, mask_frame, gt_frame) in enumerate(
-        zip(gen_frames, input_frames, mask_frames, gt_frames)
+    for pos, (gen_frame, input_frame, mask_frame) in enumerate(
+        zip(gen_frames, input_frames, mask_frames)
     ):
         if crop_mode == "full-frame":
             cropped_gen.append(gen_frame)
             cropped_input.append(input_frame)
-            cropped_gt.append(gt_frame)
             continue
 
         input_shape = input_frame.shape[:2]
@@ -387,23 +373,20 @@ def evaluate_case(
             input_frame = cv2.resize(input_frame, (gen_frame.shape[1], gen_frame.shape[0]))
         if mask_frame is not None and mask_frame.shape[:2] != gen_frame.shape[:2]:
             mask_frame = cv2.resize(mask_frame, (gen_frame.shape[1], gen_frame.shape[0]))
-        if gt_frame.shape[:2] != gen_frame.shape[:2]:
-            gt_frame = cv2.resize(gt_frame, (gen_frame.shape[1], gen_frame.shape[0]))
         if crop_mode == "mask" and base_bbox is None and mask_frame is not None:
             bbox_source = "mask_video"
             base_bbox = calculate_bbox_from_mask(mask_frame)
+        if base_bbox is None:
+            raise ValueError(f"empty ROI at frame {eval_indices[pos]}")
         bbox = expand_bbox(base_bbox, gen_frame.shape[:2])
         cropped_gen.append(crop_face(gen_frame, bbox))
         cropped_input.append(crop_face(input_frame, bbox))
-        cropped_gt.append(crop_face(gt_frame, bbox))
 
     gen_embs, gen_valid_positions = embed_frames(model, cropped_gen)
     input_embs, input_valid_positions = embed_frames(model, cropped_input)
-    gt_embs, gt_valid_positions = embed_frames(model, cropped_gt)
 
     id_sim, id_scores = average_sim(ref_emb, gen_embs)
     input_ref, input_ref_scores = average_sim(ref_emb, input_embs)
-    gt_ref, gt_ref_scores = average_sim(ref_emb, gt_embs)
     input_leak = None
     input_leak_scores: list[float] = []
     if input_embs and gen_embs:
@@ -416,7 +399,8 @@ def evaluate_case(
         "generated": generated_path.as_posix(),
         "ref_image": ref_image_path.as_posix(),
         "input_video": input_video_path.as_posix(),
-        "ground_truth": gt_video_path.as_posix(),
+        "ground_truth": None,
+        "ground_truth_evaluation": False,
         "crop_mode": crop_mode,
         "bbox_source": bbox_source,
         "face_boxes": face_boxes_path.as_posix() if face_boxes_path else None,
@@ -425,21 +409,21 @@ def evaluate_case(
         "frame_stride": frame_stride,
         "eval_frame_indices": eval_indices,
         "input_frame_indices": input_indices,
-        "ground_truth_frame_indices": gt_indices,
+        "ground_truth_frame_indices": [],
         "id_sim": id_sim,
         "id_sim_scores": id_scores,
         "input_leak": input_leak,
         "input_leak_scores": input_leak_scores,
         "input_ref": input_ref,
         "input_ref_scores": input_ref_scores,
-        "gt_ref": gt_ref,
-        "gt_ref_scores": gt_ref_scores,
+        "gt_ref": None,
+        "gt_ref_scores": [],
         "generated_valid_face_frames": len(gen_embs),
         "generated_valid_positions": gen_valid_positions,
         "input_valid_face_frames": len(input_embs),
         "input_valid_positions": input_valid_positions,
-        "ground_truth_valid_face_frames": len(gt_embs),
-        "ground_truth_valid_positions": gt_valid_positions,
+        "ground_truth_valid_face_frames": 0,
+        "ground_truth_valid_positions": [],
     }
 
 
