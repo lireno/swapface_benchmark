@@ -343,8 +343,11 @@ SHA256：`2609088c2e8c868187c9921c50bc225329a9057ed75e76120e0b4a397a2c7538`。
   小样本秩亏时 sqrtm 的数值不稳定。不是逐视频 FVD 平均。
 - 至少两个 case；不同样本数、权重、特征层或片段协议的分数不可直接混比。
   long 的单短片段 FVD 不代表整段长期一致性。
-- 第一张 `--gpu-list` 卡按 batch=4 提取特征（`--fvd-batch-size` 可调）；
-  不是多卡 FVD。不得用每卡独立 FVD 的平均值替代集合级结果。
+- 按 `--gpu-list` 启动多个特征 worker，每卡默认 batch=4（`--fvd-batch-size`
+  为每卡大小）。每个 worker 加载一次 I3D，处理分配 case 的原视频和生成视频。
+  按 case ID 严格汇总全部特征，再在主进程计算一次集合级 FVD；绝不平均每卡 FVD。
+  完成的分片特征支持断点续跑；worker 日志在 `fvd_workers/run_*/`。
+  直接运行 `tools/eval_fvd_streaming.py` 同样支持 `--gpu-list 0,1,2,3`。
 - 输出 `fvd.json` 和 `summary.json` 中的 `metrics_flat.fvd`（数值，越小越好）。
   `summary.protocol.fvd` 单独记录采样和集合级聚合规则，不沿用逐帧指标的聚合说明。
 - 成功特征缓存包含 case ID、采样索引、视频 path/size/mtime_ns、代码与权重指纹；

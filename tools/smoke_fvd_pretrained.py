@@ -14,15 +14,18 @@ def main():
                    help='Existing short200/long200 directories with source.json and results/')
     p.add_argument('--output-root',type=Path,required=True)
     p.add_argument('--gpu',default='4')
+    p.add_argument('--cases',type=int,default=2)
     p.add_argument('--models-root',type=Path,default=Path('/mnt/cpfs/users/lzk/modelscope_swapface_models/models'))
     a=p.parse_args()
+    if a.cases<2:
+        p.error('--cases must be >=2')
     root=Path(__file__).resolve().parents[1]
     results=[]
     for mode in ('short','long'):
         source=a.source_root/(mode+'200')
         dest=a.output_root/mode
         dest.mkdir(parents=True,exist_ok=True)
-        rows=json.loads((source/'source.json').read_text())['cases'][:2]
+        rows=json.loads((source/'source.json').read_text())['cases'][:a.cases]
         manifest=dest/'manifest.json'
         manifest.write_text(json.dumps({'cases':[
             {'case_id':r['case_id'],'origin_video':r.get('origin_video') or r['ref_video']}

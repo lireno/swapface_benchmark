@@ -101,6 +101,16 @@ def test_cache_validates_ids_count_and_nan(tmp_path):
     assert f.cached_activations(p,'key',['a','b']) is None
 
 
+def test_feature_merge_preserves_order_and_rejects_missing_duplicates():
+    a,b=np.ones((1,400)),np.zeros((1,400))
+    rows=f.merge_feature_shards([(['b'],b),(['a'],a)],['a','b'])
+    np.testing.assert_array_equal(rows,np.vstack([a,b]))
+    with pytest.raises(ValueError,match='duplicate'):
+        f.merge_feature_shards([(['a'],a),(['a'],b)],['a','b'])
+    with pytest.raises(ValueError,match='missing'):
+        f.merge_feature_shards([(['a'],a)],['a','b'])
+
+
 @pytest.fixture
 def stub_run(tmp_path,monkeypatch):
     p=tmp_path/'x.mp4';video(p)
@@ -206,6 +216,10 @@ os.execv(sys.executable,[sys.executable]+args)
     assert data['metrics_flat']=={'fvd':0.0}
     assert data['protocol']['fvd']['benchmark_mode']==mode
     assert not any(data['failure_count'].values())
+    artifact=json.loads((out/'fvd.json').read_text())
+    assert artifact['execution']['worker_count']==2
+    assert artifact['execution']['gpu_list']==['0','1']
+    assert artifact['activation_shape']==[2,400]
     assert not (out/'identity_strict.json').exists()
     before=(out/'fvd.json').stat().st_mtime_ns
     resumed=subprocess.run(cmd,env=env,capture_output=True,text=True)

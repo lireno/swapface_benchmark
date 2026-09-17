@@ -12,6 +12,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import zipfile
 import cv2
@@ -37,6 +38,7 @@ def parse_args():
                          ("batch-size",4), ("seed",42), ("limit",0)):
         p.add_argument("--" + key, type=int, default=default)
     p.add_argument("--device", default="cuda:0")
+    p.add_argument("--gpu-list", help="Physical GPU IDs; one persistent feature worker per GPU")
     p.add_argument("--no-cache", action="store_true", help="Bypass feature reads and writes")
     a = p.parse_args()
     if a.video_length < 15 or min(a.batch_size,a.decode_width,a.decode_height) <= 0 or a.limit < 0:
@@ -238,6 +240,115 @@ def load_rows(args):
     return rows
 
 
+def load_model(args):
+    if args.device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError("CUDA requested but unavailable")
+    sys.path.insert(0,str(Path(args.i3d_root).resolve()))
+    from pytorch_i3d_model.pytorch_i3d import InceptionI3d
+    model = InceptionI3d(400,in_channels=3)
+    model.load_state_dict(torch.load(args.weights,map_location="cpu",weights_only=True))
+    return model.eval().to(args.device)
+
+
+def feature_spec(items,side,protocol,cache_dir):
+    identity=cache_payload(items,side,protocol)
+    digest=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
+    return identity,digest,Path(cache_dir)/f"{side}_{digest}.npz"
+
+
+def save_features(path,values,ids,digest):
+    validate_activations(values,len(ids))
+    atomic_write(path,lambda file:np.savez(file,activations=values,
+                 case_ids=np.asarray(ids),fingerprint=np.asarray(digest)))
+
+
+def merge_feature_shards(shards,order):
+    """Merge feature rows by case ID, never merge/average worker FVD scores."""
+    rows={}
+    for ids,values in shards:
+        validate_activations(values,len(ids))
+        for cid,value in zip(ids,values):
+            if cid in rows:
+                raise ValueError(f"duplicate feature case: {cid}")
+            rows[cid]=value
+    if set(rows)!=set(order) or len(order)!=len(set(order)):
+        raise ValueError("missing/unexpected feature cases")
+    return np.stack([rows[cid] for cid in order])
+
+
+def parallel_features(items,sides,protocol,args):
+    """Each GPU loads I3D once and handles BOTH sides of its case shard.
+
+    Completed shard caches survive another worker's failure; retries only
+    extract missing shards. No-cache uses a fresh run directory instead.
+    """
+    gpus=[g.strip() for g in args.gpu_list.split(',') if g.strip()]
+    if not gpus or len(gpus)!=len(set(gpus)):
+        raise ValueError("GPU list must contain distinct nonempty device IDs")
+    gpus=gpus[:len(items)]
+    run_root=args.output.parent/'fvd_workers'
+    run_root.mkdir(parents=True,exist_ok=True)
+    run_dir=Path(tempfile.mkdtemp(prefix='run_',dir=run_root))
+    shard_root=run_dir/'uncached_features' if args.no_cache else args.cache_dir/'shards'
+    inventory={side:[] for side in sides}
+    processes=[]
+    try:
+        for rank,gpu in enumerate(gpus):
+            start,end=len(items)*rank//len(gpus),len(items)*(rank+1)//len(gpus)
+            subset=items[start:end]
+            ids=[i['case_id'] for i in subset]
+            jobs=[]
+            for side in sides:
+                identity,digest,path=feature_spec(subset,side,protocol,shard_root)
+                values=cached_activations(path,digest,ids) if not args.no_cache and path.is_file() else None
+                inventory[side].append((ids,digest,path))
+                if values is None:
+                    jobs.append({'side':side,'identity':identity,'fingerprint':digest,'output':str(path)})
+            if not jobs:
+                print(f'[fvd-shard-resume] rank={rank} cases=[{start},{end})',flush=True)
+                continue
+            request={'items':subset,'jobs':jobs,'protocol':protocol,'args':{
+                'i3d_root':str(args.i3d_root.resolve()),'weights':str(args.weights.resolve()),
+                'device':args.device if args.device=='cpu' else 'cuda:0',
+                'video_length':args.video_length,'decode_width':args.decode_width,
+                'decode_height':args.decode_height,'batch_size':args.batch_size,'seed':args.seed}}
+            request_path=run_dir/f'worker_{rank}.json'
+            write_json(request_path,request)
+            log_path=run_dir/f'worker_{rank}_gpu{gpu}.log'
+            with log_path.open('w') as log:
+                process=subprocess.Popen([sys.executable,str(Path(__file__).with_name('fvd_feature_worker.py')),
+                    '--request',str(request_path)],env={**os.environ,'CUDA_VISIBLE_DEVICES':gpu},
+                    stdout=log,stderr=subprocess.STDOUT)
+            processes.append((rank,gpu,process,log_path))
+            print(f'[fvd-shard] rank={rank} physical_gpu={gpu} cases=[{start},{end}) log={log_path}',flush=True)
+        failures=[]
+        for rank,gpu,process,log_path in processes:
+            code=process.wait()
+            if code:
+                failures.append({'rank':rank,'gpu':gpu,'exit_code':code,'log':str(log_path)})
+        if failures:
+            raise RuntimeError(f'FVD feature workers failed: {failures}')
+    finally:
+        # Only our own unfinished children, e.g. if spawning was interrupted.
+        for _,_,process,_ in processes:
+            if process.poll() is None:
+                process.terminate()
+                try: process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill();process.wait()
+    merged={}
+    for side,entries in inventory.items():
+        shards=[]
+        for ids,digest,path in entries:
+            values=cached_activations(path,digest,ids)
+            if values is None:
+                raise RuntimeError(f'missing/invalid completed shard: {path}')
+            shards.append((ids,values))
+        merged[side]=merge_feature_shards(shards,[i['case_id'] for i in items])
+    return merged,{'gpu_list':gpus,'worker_count':len(processes),'run_dir':str(run_dir),
+                   'aggregation':'all feature rows gathered, one global FVD'}
+
+
 def run(args):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -260,6 +371,7 @@ def run(args):
         "reference_implementation":"HiFiVFS_wan/frechet_video_distance.py",
         "i3d_output":"400 Kinetics logits averaged over output time",
         "weights_sha256":sha256(args.weights),"evaluator_sha256":sha256(Path(__file__)),
+        "feature_worker_sha256":sha256(Path(__file__).with_name('fvd_feature_worker.py')),
         "i3d_code_sha256":{str(p.relative_to(args.i3d_root)):sha256(p) for p in source_files},
         "video_length":args.video_length,"decode_size":[args.decode_width,args.decode_height],
         "i3d_input_size":[224,224],"normalization":"2*x/255-1","seed":args.seed,
@@ -269,35 +381,34 @@ def run(args):
         "aggregation":"dataset-level Frechet distance; not average per-case FVD",
         "video_fingerprint":"resolved path, size, mtime_ns; --no-cache for stat-preserving edits"}
     ids = [i["case_id"] for i in items]
-    features,caches = {},{}
-    model = None
+    features,caches,specs = {},{},{}
     for side in ("origin","generated"):
-        identity = cache_payload(items,side,protocol)
-        digest = hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()
-        path = args.cache_dir/f"{side}_{digest}.npz"
-        values = cached_activations(path,digest,ids) if not args.no_cache and path.is_file() else None
-        if values is None:
-            if model is None:
-                if args.device.startswith("cuda") and not torch.cuda.is_available():
-                    raise RuntimeError("CUDA requested but unavailable")
-                sys.path.insert(0,str(args.i3d_root.resolve()))
-                from pytorch_i3d_model.pytorch_i3d import InceptionI3d
-                model = InceptionI3d(400,in_channels=3)
-                model.load_state_dict(torch.load(args.weights,map_location="cpu",weights_only=True))
-                model.eval().to(args.device)
-            values = extract_activations(items,side,model,args)
+        identity,digest,path=feature_spec(items,side,protocol,args.cache_dir)
+        specs[side]=(identity,digest,path)
+        values=cached_activations(path,digest,ids) if not args.no_cache and path.is_file() else None
+        if values is not None:
+            features[side]=values
+            print(f"[resume] {path}",flush=True)
+        caches[side]=str(path) if not args.no_cache else None
+    missing=[s for s in specs if s not in features]
+    execution={"gpu_list":None,"worker_count":0,"aggregation":"one global FVD"}
+    if missing:
+        if getattr(args,"gpu_list",None):
+            extracted,execution=parallel_features(items,missing,protocol,args)
+        else:
+            model=load_model(args)
+            extracted={s:extract_activations(items,s,model,args) for s in missing}
+        for side in missing:
+            identity,digest,path=specs[side]
             if cache_payload(items,side,protocol)!=identity:
                 raise RuntimeError(f"{side} inputs changed during extraction")
+            features[side]=extracted[side]
             if not args.no_cache:
-                atomic_write(path,lambda file:np.savez(file,activations=values,
-                             case_ids=np.asarray(ids),fingerprint=np.asarray(digest)))
-        else:
-            print(f"[resume] {path}",flush=True)
-        features[side],caches[side] = values,str(path) if not args.no_cache else None
+                save_features(path,features[side],ids,digest)
     score = fvd(features["origin"],features["generated"])
     payload = {"status":"complete","fvd":score,"case_count":len(items),"failure_count":0,
         "activation_shape":list(features["origin"].shape),"protocol":protocol,
-        "mapping":items,"failures":[],"cache":caches}
+        "mapping":items,"failures":[],"cache":caches,"execution":execution}
     write_json(args.output,payload)
     print(json.dumps({"fvd":score,"case_count":len(items),"output":str(args.output)}))
 

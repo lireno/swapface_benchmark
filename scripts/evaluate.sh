@@ -369,13 +369,13 @@ if has_any face_similarity pose gaze expression lighting; then
 fi
 
 if has_metric fvd; then
-  # Feature extraction runs on the first selected GPU; FVD is computed ONCE
+  # Feature extraction runs across all selected GPUs; FVD is computed ONCE
   # over all cases, never by averaging independent per-shard FVD scores.
   FVD_FINGERPRINT="$("$PYTHON_BIN" "$ROOT/tools/evaluation_fingerprint.py" --mapping "$MAPPING" --code-root "$ROOT" "$FVD_WEIGHTS" "$FVD_I3D_ROOT/pytorch_i3d_model")"
   FVD_CACHE_ARGS=()
   [[ "$RESUME" == 1 ]] || FVD_CACHE_ARGS+=(--no-cache)
   run_stage fvd "paired-logits400-v2|$BENCHMARK_MODE|$FVD_VIDEO_LENGTH|$FVD_BATCH_SIZE|$FVD_SEED|$FVD_FINGERPRINT" "$OUTPUT_DIR/fvd.json" \
-    env CUDA_VISIBLE_DEVICES="${GPU_LIST%%,*}" "$PYTHON_BIN" "$ROOT/tools/eval_fvd_streaming.py" \
+    "$PYTHON_BIN" "$ROOT/tools/eval_fvd_streaming.py" --gpu-list "$GPU_LIST" \
       --mapping "$MAPPING" --benchmark-mode "$BENCHMARK_MODE" \
       --i3d-root "$FVD_I3D_ROOT" --weights "$FVD_WEIGHTS" --output "$OUTPUT_DIR/fvd.json" \
       --cache-dir "$OUTPUT_DIR/fvd_cache" --video-length "$FVD_VIDEO_LENGTH" \
