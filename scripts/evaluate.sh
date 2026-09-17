@@ -19,10 +19,15 @@ DEFAULT_DEEP3D_ROOT="${DEFAULT_DEEP3D_ROOT:-$ONBOARDING_FACEBENCH/eval_tools/thi
 DEFAULT_MUSIQ_MODEL="${DEFAULT_MUSIQ_MODEL:-$ONBOARDING_ROOT/third_party/vbench_runtime/weights/musiq_spaq_ckpt-358bb6af.pth}"
 DEFAULT_DINO_ROOT="${DEFAULT_DINO_ROOT:-$DEFAULT_ASSETS_ROOT/models/vbench/dino}"
 DINO_CODE_ROOT="$ROOT/vendor/dino"
+FVD_I3D_ROOT="${FVD_I3D_ROOT:-$ROOT/vendor}"
+FVD_WEIGHTS="${FVD_WEIGHTS:-}"
+FVD_VIDEO_LENGTH=15
+FVD_BATCH_SIZE=4
+FVD_SEED=42
 
 usage() {
   sed -n '/^# Usage:/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
-  printf '%s\n' "Metric names: id_strict,input_leak,id_arc,id_ins,id_cur,face_similarity,pose,gaze,expression,lighting,imaging_quality,subject_consistency,temporal_flickering"
+  printf '%s\n' "Metric names: id_strict,input_leak,id_arc,id_ins,id_cur,face_similarity,pose,gaze,expression,lighting,imaging_quality,subject_consistency,temporal_flickering,fvd"
   printf '%s\n' "Groups: all,identity,identity_multi,facebench,vbench,temporal,restoration"
 }
 
@@ -42,6 +47,11 @@ usage() {
 #   --gpu-list LIST           visible GPU IDs (default: 0)
 #   --model-profile NAME      onboarding or assets (default: onboarding)
 #   --models-root DIR         model root for the assets profile
+#   --fvd-i3d-root DIR        contains pytorch_i3d_model/pytorch_i3d.py
+#   --fvd-weights FILE        required for FVD; default MODELS_ROOT/fvd/rgb_imagenet.pt
+#   --fvd-video-length N      consecutive frames per clip (default: 15, minimum: 15)
+#   --fvd-batch-size N        I3D batch size (default: 4)
+#   --fvd-seed N              deterministic paired clip sampling (default: 42)
 #   --register                register this completed eval and rebuild its gallery
 #   --register-id ID          stable unique ID (default: RESULTS_DIR basename)
 #   --register-label LABEL    display label (default: register ID)
@@ -104,6 +114,11 @@ while [[ $# -gt 0 ]]; do
     --num-gpus) NUM_GPUS="$2"; shift 2 ;;
     --model-profile) MODEL_PROFILE="$2"; shift 2 ;;
     --models-root) MODELS_ROOT="$2"; shift 2 ;;
+    --fvd-i3d-root) FVD_I3D_ROOT="$2"; shift 2 ;;
+    --fvd-weights) FVD_WEIGHTS="$2"; shift 2 ;;
+    --fvd-video-length) FVD_VIDEO_LENGTH="$2"; shift 2 ;;
+    --fvd-batch-size) FVD_BATCH_SIZE="$2"; shift 2 ;;
+    --fvd-seed) FVD_SEED="$2"; shift 2 ;;
     --register) REGISTER=1; shift ;;
     --no-register) REGISTER=0; shift ;;
     --register-id) REGISTER_ID="$2"; shift 2 ;;
@@ -178,7 +193,7 @@ fi
 
 SELECTED="$($PYTHON_BIN - "$METRICS" "$EXCLUDE_METRICS" <<'PY'
 import sys
-atomic = {'id_strict','input_leak','id_arc','id_ins','id_cur','face_similarity','pose','gaze','expression','lighting','imaging_quality','subject_consistency','temporal_flickering'}
+atomic = {'id_strict','input_leak','id_arc','id_ins','id_cur','face_similarity','pose','gaze','expression','lighting','imaging_quality','subject_consistency','temporal_flickering','fvd'}
 groups = {
  'all': atomic, 'identity': {'id_strict','input_leak','id_arc','id_ins','id_cur'},
  'identity_multi': {'id_arc','id_ins','id_cur'},
@@ -207,6 +222,18 @@ fi
 has_metric() { [[ ",$SELECTED," == *",$1,"* ]]; }
 has_any() { local name; for name in "$@"; do has_metric "$name" && return 0; done; return 1; }
 require_file() { [[ -f "$1" ]] || { printf 'Required model not found: %s\n' "$1" >&2; exit 2; }; }
+if has_metric fvd; then
+  if [[ "$MODEL_PROFILE" == assets ]]; then
+    FVD_WEIGHTS="${FVD_WEIGHTS:-$MODELS_ROOT/fvd/rgb_imagenet.pt}"
+  else
+    FVD_WEIGHTS="${FVD_WEIGHTS:-/mnt/cpfs/users/lzk/modelscope_swapface_models/models/fvd/rgb_imagenet.pt}"
+  fi
+  require_file "$FVD_WEIGHTS"
+  require_file "$FVD_I3D_ROOT/pytorch_i3d_model/pytorch_i3d.py"
+  [[ "$FVD_VIDEO_LENGTH" =~ ^[0-9]+$ && "$FVD_VIDEO_LENGTH" -ge 15 && "$FVD_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || {
+    printf '%s\n' 'FVD requires video-length >=15 and positive batch-size.' >&2; exit 2;
+  }
+fi
 if has_any id_strict input_leak id_arc id_ins id_cur face_similarity; then
   require_file "$ID_MODELS_DIR/scrfd_10g_bnkps.onnx"
 fi
@@ -255,8 +282,16 @@ PREPARE_ARGS=(--manifest "$MANIFEST" --results-dir "$RESULTS_DIR" --output "$MAP
 [[ -n "$MASK_DIR" ]] && PREPARE_ARGS+=(--mask-dir "$MASK_DIR")
 [[ -n "$REF_DIR" ]] && PREPARE_ARGS+=(--ref-dir "$REF_DIR")
 has_any id_strict input_leak id_arc id_ins id_cur face_similarity || PREPARE_ARGS+=(--no-reference)
+VALIDATE_ARGS=()
+if [[ "$SELECTED" == fvd ]]; then
+  PREPARE_ARGS+=(--no-roi)
+  VALIDATE_ARGS+=(--no-roi)
+fi
+VALIDATE_STRIDE="$EVAL_FRAME_STRIDE"
+# FVD samples consecutive frames, possibly beyond the last framewise-stride sample.
+has_metric fvd && VALIDATE_STRIDE=1
 "$PYTHON_BIN" "$ROOT/tools/prepare_results.py" "${PREPARE_ARGS[@]}"
-"$PYTHON_BIN" "$ROOT/tools/validate_mapping.py" --mapping "$MAPPING" --output "$OUTPUT_DIR/input_report.json" --errors "$OUTPUT_DIR/errors.log" --max-frames "$EVAL_MAX_FRAMES" --frame-stride "$EVAL_FRAME_STRIDE"
+"$PYTHON_BIN" "$ROOT/tools/validate_mapping.py" --mapping "$MAPPING" --output "$OUTPUT_DIR/input_report.json" --errors "$OUTPUT_DIR/errors.log" --max-frames "$EVAL_MAX_FRAMES" --frame-stride "$VALIDATE_STRIDE" "${VALIDATE_ARGS[@]}"
 MAPPING_HASH="$(sha256sum "$MAPPING" | awk '{print $1}')"
 RUN_FINGERPRINT="$("$PYTHON_BIN" "$ROOT/tools/evaluation_fingerprint.py" --mapping "$MAPPING" --code-root "$ROOT" "$ID_MODELS_DIR" "$ARCFACE_MODEL" "$CURRICULAR_MODEL" "$COSFACE_MODEL" "$POSE_MODEL" "$GAZE_MODEL" "$DEEP3D_ROOT" "$MUSIQ_MODEL" "$DINO_ROOT" "${FACEBENCH_LANDMARK_MODEL:-$ID_MODELS_DIR/scrfd_10g_bnkps.onnx}")"
 MAPPING_HASH="$MAPPING_HASH|$RUN_FINGERPRINT"
@@ -333,6 +368,20 @@ if has_any face_similarity pose gaze expression lighting; then
   fi
 fi
 
+if has_metric fvd; then
+  # Feature extraction runs on the first selected GPU; FVD is computed ONCE
+  # over all cases, never by averaging independent per-shard FVD scores.
+  FVD_FINGERPRINT="$("$PYTHON_BIN" "$ROOT/tools/evaluation_fingerprint.py" --mapping "$MAPPING" --code-root "$ROOT" "$FVD_WEIGHTS" "$FVD_I3D_ROOT/pytorch_i3d_model")"
+  FVD_CACHE_ARGS=()
+  [[ "$RESUME" == 1 ]] || FVD_CACHE_ARGS+=(--no-cache)
+  run_stage fvd "paired-logits400-v2|$BENCHMARK_MODE|$FVD_VIDEO_LENGTH|$FVD_BATCH_SIZE|$FVD_SEED|$FVD_FINGERPRINT" "$OUTPUT_DIR/fvd.json" \
+    env CUDA_VISIBLE_DEVICES="${GPU_LIST%%,*}" "$PYTHON_BIN" "$ROOT/tools/eval_fvd_streaming.py" \
+      --mapping "$MAPPING" --benchmark-mode "$BENCHMARK_MODE" \
+      --i3d-root "$FVD_I3D_ROOT" --weights "$FVD_WEIGHTS" --output "$OUTPUT_DIR/fvd.json" \
+      --cache-dir "$OUTPUT_DIR/fvd_cache" --video-length "$FVD_VIDEO_LENGTH" \
+      --batch-size "$FVD_BATCH_SIZE" --seed "$FVD_SEED" --device cuda:0 "${FVD_CACHE_ARGS[@]}"
+fi
+
 SUMMARY_ARGS=(--input-report "$OUTPUT_DIR/input_report.json" --selected "$SELECTED" \
   --benchmark-mode "$BENCHMARK_MODE" --max-eval-frames "$EVAL_MAX_FRAMES" \
   --frame-stride "$EVAL_FRAME_STRIDE" --output "$OUTPUT_DIR/summary.json")
@@ -340,6 +389,7 @@ has_any id_strict input_leak && [[ -s "$OUTPUT_DIR/identity_strict.json" ]] && S
 has_any id_arc id_ins id_cur && [[ -s "$OUTPUT_DIR/identity_multibackbone.json" ]] && SUMMARY_ARGS+=(--identity-multibackbone "$OUTPUT_DIR/identity_multibackbone.json")
 has_any imaging_quality subject_consistency temporal_flickering && [[ -s "$OUTPUT_DIR/vbench_quality.json" ]] && SUMMARY_ARGS+=(--vbench-quality "$OUTPUT_DIR/vbench_quality.json")
 has_any face_similarity pose gaze expression lighting && [[ -s "$OUTPUT_DIR/facebench/evaluation_summary_sim.json" ]] && SUMMARY_ARGS+=(--facebench "$OUTPUT_DIR/facebench/evaluation_summary_sim.json")
+has_metric fvd && [[ -s "$OUTPUT_DIR/fvd.json" ]] && SUMMARY_ARGS+=(--fvd "$OUTPUT_DIR/fvd.json")
 "$PYTHON_BIN" "$ROOT/tools/summarize.py" "${SUMMARY_ARGS[@]}"
 printf 'Benchmark complete: %s\n' "$OUTPUT_DIR/summary.json"
 if [[ ${#FAILED_STAGES[@]} -gt 0 ]]; then

@@ -11,6 +11,7 @@
 - pyIQA: <https://github.com/chaofengc/IQA-PyTorch>
 - VBench: <https://github.com/Vchitect/VBench>
 - DINO: <https://github.com/facebookresearch/dino>
+- PyTorch I3D: <https://github.com/piergiaj/pytorch-i3d> (Apache-2.0; code and license in `vendor/pytorch_i3d_model`; RGB ImageNet+Kinetics weights stored separately)
 - nvdiffrast: <https://github.com/NVlabs/nvdiffrast>
 
 特别注意：InsightFace 提供的预训练模型可能带有非商业使用限制；Basel Face Model 相关资产也有独立许可。请在分发和使用前自行确认研究用途与授权范围。

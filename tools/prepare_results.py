@@ -41,6 +41,7 @@ def main() -> int:
     parser.add_argument("--mask-dir", type=Path)
     parser.add_argument("--ref-dir", type=Path)
     parser.add_argument("--no-reference", action="store_true", help="skip reference images for attribute/quality-only evaluation")
+    parser.add_argument("--no-roi", action="store_true", help="FVD-only full-frame evaluation needs no face boxes/masks")
     args = parser.parse_args()
 
     payload = load_json(args.manifest)
@@ -53,7 +54,7 @@ def main() -> int:
     mapping: list[dict[str, Any]] = []
     for index, case in enumerate(cases, start=1):
         case_id = case["case_id"]
-        face_boxes = (
+        face_boxes = None if args.no_roi else (
             next((path for path in (
                 args.mask_dir / f"{case_id}.json",
                 args.mask_dir / f"{case_id}.mp4",
@@ -61,7 +62,7 @@ def main() -> int:
             ) if path.is_file()), None)
             if args.mask_dir else resolve_asset(args.manifest, case["face_boxes"])
         )
-        if face_boxes is None:
+        if face_boxes is None and not args.no_roi:
             raise FileNotFoundError(f"mask/face boxes not found for {case_id} in {args.mask_dir}")
         origin_video = args.origin_dir / f"{case_id}.mp4" if args.origin_dir else resolve_asset(args.manifest, case["origin_video"])
         ref_image = None if args.no_reference else (args.ref_dir / f"{case_id}.jpg" if args.ref_dir else resolve_asset(args.manifest, case["ref_image"]))
@@ -78,8 +79,8 @@ def main() -> int:
             "facebench_video_id": f"{index:05d}",
             "ref_image": ref_image.resolve().as_posix() if ref_image is not None else None,
             "ref_video": origin_video.resolve().as_posix(),
-            "ref_video_face_boxes": face_boxes.resolve().as_posix(),
-            "ref_video_facemask": face_boxes.resolve().as_posix(),
+            "ref_video_face_boxes": face_boxes.resolve().as_posix() if face_boxes else None,
+            "ref_video_facemask": face_boxes.resolve().as_posix() if face_boxes else None,
             "generated": find_generated(args.results_dir, case_id).as_posix(),
         }
         mapping.append(row)

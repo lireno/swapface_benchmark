@@ -40,6 +40,7 @@ def main() -> int:
     parser.add_argument("--errors", type=Path, required=True)
     parser.add_argument("--max-frames", type=int, default=0, help="validate first N generated frames; 0 validates all")
     parser.add_argument("--frame-stride", type=int, default=1)
+    parser.add_argument("--no-roi", action="store_true", help="Validate video pair only (FVD-only)")
     args = parser.parse_args()
     if args.frame_stride <= 0:
         raise ValueError("frame stride must be positive")
@@ -68,6 +69,9 @@ def main() -> int:
                 errors.append({"case_id": case_id, "dependency": "origin", "error_code": "ORIGIN_TOO_SHORT", "required_duration": generated["evaluated_duration"], "available_duration": origin["duration"]})
         except Exception as error:
             errors.append({"case_id": case_id, "dependency": "origin", "error_code": "INVALID_ORIGIN", "error": str(error)})
+            cases.append(report)
+            continue
+        if args.no_roi:
             cases.append(report)
             continue
         try:

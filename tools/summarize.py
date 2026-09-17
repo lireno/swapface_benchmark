@@ -20,6 +20,7 @@ def main() -> int:
     parser.add_argument("--vbench-quality", type=Path)
     parser.add_argument("--imaging-quality", type=Path, help="Legacy standalone imaging-quality artifact")
     parser.add_argument("--input-report", type=Path)
+    parser.add_argument("--fvd", type=Path)
     parser.add_argument("--selected", default="", help="Canonical comma-separated selected metrics")
     parser.add_argument("--benchmark-mode", choices=("short", "long"))
     parser.add_argument("--max-eval-frames", type=int, default=0)
@@ -32,8 +33,11 @@ def main() -> int:
         "facebench": load(args.facebench),
         "vbench_quality": load(args.vbench_quality),
         "imaging_quality": load(args.imaging_quality),
+        "fvd": load(args.fvd),
     }
     flat: dict[str, Any] = {}
+    if sources["fvd"]:
+        flat["fvd"] = sources["fvd"].get("fvd")
     strict = sources["identity_strict"]
     if strict:
         flat.update({key: strict["metrics"][key] for key in ("id_sim", "input_leak") if key in strict.get("metrics", {})})
@@ -62,6 +66,7 @@ def main() -> int:
             "imaging_quality": {"vbench_imaging_quality", "raw_musiq_spaq"},
             "subject_consistency": {"vbench_subject_consistency"},
             "temporal_flickering": {"vbench_temporal_flickering"},
+            "fvd": {"fvd"},
         }
         for name in selected:
             permitted.update(aliases.get(name, set()))
@@ -83,6 +88,7 @@ def main() -> int:
             'identity_multibackbone': {'id_arc', 'id_ins', 'id_cur'},
             'facebench': {'face_similarity', 'pose', 'gaze', 'expression', 'lighting'},
             'vbench_quality': {'imaging_quality', 'subject_consistency', 'temporal_flickering'},
+            'fvd': {'fvd'},
         }
         for name, metrics in required.items():
             if selected & metrics and sources[name] is None:
@@ -103,9 +109,11 @@ def main() -> int:
             "vbench_quality": args.vbench_quality,
             "imaging_quality": args.imaging_quality,
             "input_report": args.input_report,
+            "fvd": args.fvd,
         }.items() if path and path.is_file()
     }
     grouped = {
+        "distribution": {key: value for key, value in flat.items() if key == "fvd"},
         "identity": {key: value for key, value in flat.items() if key in {"id_sim", "id_arc", "id_ins", "id_cur", "id_variance", "input_leak", "face_detection_rate", "face_similarity", "face_similarity_src"}},
         "quality": {key: value for key, value in flat.items() if key in {"vbench_imaging_quality", "raw_musiq_spaq"}},
         "temporal": {key: value for key, value in flat.items() if key in {"vbench_subject_consistency", "vbench_temporal_flickering"}},
@@ -119,7 +127,8 @@ def main() -> int:
             "max_eval_frames": args.max_eval_frames,
             "frame_stride": args.frame_stride,
             "frame_indices": f"0,{args.frame_stride},{2 * args.frame_stride},...",
-            "aggregation": "frame mean per case, then equal-weight mean across cases",
+            "aggregation": "frame mean per case, then equal-weight mean across cases; FVD is dataset-level",
+            "fvd": (sources["fvd"] or {}).get("protocol"),
         },
         "case_count": input_report.get("case_count") if input_report else next((value.get("case_count") for value in sources.values() if value), None),
         "failure_count": failures,

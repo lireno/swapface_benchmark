@@ -303,4 +303,63 @@ Metric 可以与模型训练 / 视频生成共享已分配的 GPU/PPU；外部�
 
 ## 第三方代码与模型
 
+### FVD（2026-09-17）
+
+short 和 long 的 `--metrics all` 现在均包含 `fvd`。旧指标集可用
+`--exclude-metrics fvd`；仅算 FVD 用 `--metrics fvd`，无需参考图、ROI/mask
+或 GAN 视频，只需 manifest 中的 `case_id`、`origin_video` 及生成结果。
+仍使用公共 mapping 的文件名解析规则；原视频和生成视频必须时间零点对齐。
+
+```bash
+PYTHON_BIN=/mnt/cpfs/users/lyw/venvs/idvtrain/bin/python \
+bash scripts/evaluate.sh /path/to/generated_videos \
+  --manifest /path/to/short_manifest.json --benchmark-mode short \
+  --metrics fvd --gpu-list 0,1,2,3 --output-dir /path/to/eval_fvd_short \
+  --fvd-weights /path/to/rgb_imagenet.pt
+```
+
+long 使用对应 manifest，并改 `--benchmark-mode long` 和输出目录即可。
+`--fvd-i3d-root` 需包含 `pytorch_i3d_model/pytorch_i3d.py`，默认使用本仓库
+`vendor/` 内置源码，无需 pip 安装。assets profile 的权重默认
+`MODELS_ROOT/fvd/rgb_imagenet.pt`；onboarding profile 默认
+`/mnt/cpfs/users/lzk/modelscope_swapface_models/models/fvd/rgb_imagenet.pt`。
+也可通过 `FVD_WEIGHTS` 环境变量或 `--fvd-weights` 指定。网络模块不会自动下载模型；
+缺失会明确报错，不能将缺失指标当成成功。2026-09-17 已下载官方固定版本
+RGB 权重到上述共享目录（50,883,138 字节），严格加载匹配通过。
+SHA256：`2609088c2e8c868187c9921c50bc225329a9057ed75e76120e0b4a397a2c7538`。
+来源/版本记录在权重旁的 `provenance.json`，模型包 manifest 和 SHA256SUMS 已追加登记。
+
+协议 `paired_timestamp_i3d_logits400_v2`：
+
+- 每 case 取一个连续 15 帧片段（`--fvd-video-length`，最小 15），seed 默认 42
+  （`--fvd-seed`）。short 只在前 81 帧窗口选起点，long 在完整生成时间轴选起点；
+  case hash 固定起点，原视频帧按 `round(generated_index / generated_fps * origin_fps)` 对齐。
+  不独立按两段视频各自长度取比例位置，也不应用其他指标的 stride=5/15。
+- 原视频必须覆盖整个评测窗口，不静默截断。真正不足片段长度的视频，两边对应序列
+  按相同规则循环重复；解码失败不补帧。变速/pingpong 输入应预先通过 adapter 对齐。
+- 全帧输入，不裁 ROI；保留 HiFiVFS 预处理：RGB -> 640x480 -> 224x224，
+  `2*x/255-1`。I3D 400 类 logits 沿输出时间平均，集合级均值与无偏协方差，
+  float64 协方差因子 SVD（与 Bures/PSD 公式等价）计算 Frechet 距离，避免
+  小样本秩亏时 sqrtm 的数值不稳定。不是逐视频 FVD 平均。
+- 至少两个 case；不同样本数、权重、特征层或片段协议的分数不可直接混比。
+  long 的单短片段 FVD 不代表整段长期一致性。
+- 第一张 `--gpu-list` 卡按 batch=4 提取特征（`--fvd-batch-size` 可调）；
+  不是多卡 FVD。不得用每卡独立 FVD 的平均值替代集合级结果。
+- 输出 `fvd.json` 和 `summary.json` 中的 `metrics_flat.fvd`（数值，越小越好）。
+  `summary.protocol.fvd` 单独记录采样和集合级聚合规则，不沿用逐帧指标的聚合说明。
+- 成功特征缓存包含 case ID、采样索引、视频 path/size/mtime_ns、代码与权重指纹；
+  完整成功才原子写入，失败记录不充当缓存。`--no-resume` 同时绕过 FVD 特征缓存。
+  保留大小和时间戳的原位修改不能被 stat 指纹识别，这种情况请强制重算。
+
+实现：`tools/eval_fvd_streaming.py` 为 CLI，`tools/fvd_paired.py` 为核心逻辑。
+CPU 回归测试：`PYTHONPATH=.:tools python -m pytest -q tests/test_fvd_paired.py`。
+测试中的 stub I3D 仅用于验证接线/缓存，不是预训练模型的数值验证。
+
+真实权重 smoke（2026-09-17）：PPU4、batch=1，已完成 opt2000 streaming 模型
+short/long 各 2 个 case 的公开入口 FVD-only 验证，失败数均为 0。
+输出在 `output/fvd_pretrained_smoke_20260917/{short,long}/summary.json`。
+short 使用生成时的 pingpong eval_adapter 原视频，保持时序对应。
+这些仅是功能 smoke，不是 200-case 正式指标；不可用于模型比较。
+复现入口 `tools/smoke_fvd_pretrained.py --help`，不会触发其他评测指标。
+
 本仓库 vendoring 了 FaceBench、Deep3DFaceRecon 和 pyIQA 的必要源码。模型权重遵循各上游项目的许可与使用限制，详见 [THIRD_PARTY.md](THIRD_PARTY.md)。
