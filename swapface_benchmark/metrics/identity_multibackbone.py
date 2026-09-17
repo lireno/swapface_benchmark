@@ -79,18 +79,23 @@ def video_shape(path: Path) -> tuple[int, int]:
 
 class SharedFaceAligner:
     def __init__(self, detector_path: Path, device: int, det_size: int, det_thresh: float) -> None:
+        from swapface_benchmark.runtime_limits import configure_cpu_runtime, ort_session_options
+        configure_cpu_runtime()
         import onnxruntime as ort
         from insightface.model_zoo.scrfd import SCRFD
 
         providers: list[Any] = ["CPUExecutionProvider"]
         if device >= 0:
             providers = [("CUDAExecutionProvider", {"device_id": device}), "CPUExecutionProvider"]
-        session = ort.InferenceSession(detector_path.as_posix(), providers=providers)
+        session = ort.InferenceSession(detector_path.as_posix(), sess_options=ort_session_options(), providers=providers)
         self.detector = SCRFD(model_file=detector_path.as_posix(), session=session)
         self.detector.prepare(device, input_size=(det_size, det_size), det_thresh=det_thresh)
         self.det_thresh = det_thresh
         if device >= 0 and "CUDAExecutionProvider" not in session.get_providers():
             raise RuntimeError("CUDAExecutionProvider requested but SCRFD is not running on CUDA")
+        if device >= 0:
+            from swapface_benchmark.runtime_limits import require_ort_cuda
+            require_ort_cuda(session)
         print(f"[multi-id] detector providers: {session.get_providers()}", flush=True)
 
     def align(self, image_bgr: np.ndarray) -> np.ndarray | None:
@@ -107,17 +112,22 @@ class SharedFaceAligner:
 
 class OnnxFaceEncoder:
     def __init__(self, path: Path, device: int, batch_size: int) -> None:
+        from swapface_benchmark.runtime_limits import configure_cpu_runtime, ort_session_options
+        configure_cpu_runtime()
         import onnxruntime as ort
 
         providers: list[Any] = ["CPUExecutionProvider"]
         if device >= 0:
             providers = [("CUDAExecutionProvider", {"device_id": device}), "CPUExecutionProvider"]
-        self.session = ort.InferenceSession(path.as_posix(), providers=providers)
+        self.session = ort.InferenceSession(path.as_posix(), sess_options=ort_session_options(), providers=providers)
         self.input_name = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
         self.batch_size = batch_size
         if device >= 0 and "CUDAExecutionProvider" not in self.session.get_providers():
             raise RuntimeError(f"CUDAExecutionProvider requested but {path} is not running on CUDA")
+        if device >= 0:
+            from swapface_benchmark.runtime_limits import require_ort_cuda
+            require_ort_cuda(self.session)
         print(f"[multi-id] {path.name} providers: {self.session.get_providers()}", flush=True)
 
     @staticmethod

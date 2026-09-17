@@ -15,6 +15,7 @@ from torch.autograd import Variable
 from collections import Counter
 from typing import List, Optional, Tuple
 import cv2
+from swapface_benchmark.runtime_limits import configure_cpu_runtime, insightface_model
 
 # 获取当前文件的目录，用于构建绝对路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -111,6 +112,7 @@ def get_torch_current_device():
 
 class MetricsCalculator:
     def __init__(self,device) -> None:
+        configure_cpu_runtime()
         # Ray会自动分配CUDA设备，无需手动指定device
         # breakpoint()
         self.device = device
@@ -271,12 +273,15 @@ class MetricsCalculator:
             network = define_net_recon('resnet50', use_last_fc=False, init_path=None)
             network.load_state_dict(checkpoint['net_recon'], strict=True)
             self.deep3d_model = network.to(self.device).eval()
-            from insightface.model_zoo import get_model
             landmark_path = os.environ.get('FACEBENCH_LANDMARK_MODEL')
             if not landmark_path or not os.path.isfile(landmark_path):
                 raise FileNotFoundError('Set FACEBENCH_LANDMARK_MODEL to a local SCRFD/RetinaFace five-point ONNX')
-            self.deep3d_landmark_detector = get_model(landmark_path, providers=['CPUExecutionProvider'])
-            self.deep3d_landmark_detector.prepare(ctx_id=-1, input_size=(640, 640), det_thresh=0.5)
+            from swapface_benchmark.runtime_limits import ort_providers
+            device = torch.device(self.device)
+            ctx_id = (device.index or 0) if device.type == 'cuda' else -1
+            self.deep3d_landmark_detector = insightface_model(landmark_path, providers=ort_providers(ctx_id))
+            self.deep3d_landmark_detector.prepare(ctx_id=ctx_id, input_size=(640, 640), det_thresh=0.5)
+            print('[Deep3D landmark providers]', self.deep3d_landmark_detector.session.get_providers(), flush=True)
             self.lm3d_std = load_lm3d(bfm_folder)
             self.deep3d_model_path = checkpoints_dir
 

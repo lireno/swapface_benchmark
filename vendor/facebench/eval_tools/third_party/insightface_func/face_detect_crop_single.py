@@ -17,6 +17,7 @@ from insightface.model_zoo import model_zoo
 from insightface_func.utils import face_align_ffhqandnewarc as face_align
 
 import onnxruntime as ort
+from swapface_benchmark.runtime_limits import insightface_model, ort_providers, require_ort_cuda
 
 __all__ = ['Face_detect_crop', 'Face']
 
@@ -70,7 +71,7 @@ class Face_detect_crop:
             if onnx_file.find('_selfgen_')>0:
                 #print('ignore:', onnx_file)
                 continue
-            model = model_zoo.get_model(onnx_file)
+            model = insightface_model(onnx_file)
             if model.taskname not in self.models:
                 print('find model:', onnx_file, model.taskname)
                 self.models[model.taskname] = model
@@ -87,11 +88,7 @@ class Face_detect_crop:
         print('set det-size:', det_size)
         self.det_size = det_size
         for taskname, model in self.models.items():
-            available_providers = set(ort.get_available_providers())
-            requested_providers = []
-            if 'CUDAExecutionProvider' in available_providers:
-                requested_providers.append('CUDAExecutionProvider')
-            requested_providers.append('CPUExecutionProvider')
+            requested_providers = ort_providers(ctx_id)
             if taskname=='detection':
                 _prepare_detection_model(model, ctx_id, det_size, det_thresh)  # 有问题，并没有真的设置成用显卡
                 model.session.set_providers(requested_providers)
@@ -99,6 +96,8 @@ class Face_detect_crop:
                 model.prepare(ctx_id)  # 有问题，并没有真的设置成用显卡
                 model.session.set_providers(requested_providers)
             
+            if ctx_id >= 0:
+                require_ort_cuda(model.session)
             # print(f"{taskname} Providers:", model.session.get_providers())
 
     def get(self, img, crop_size, max_num=0):

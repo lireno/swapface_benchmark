@@ -142,7 +142,7 @@ def extract_activations(items,side,model,args):
                     args.video_length,(args.decode_width,args.decode_height)))
             except Exception as error:
                 raise RuntimeError(f"case={item['case_id']} side={side}: {error}") from error
-        tensor = preprocess(torch.from_numpy(np.stack(videos))).to(args.device)
+        tensor = preprocess(torch.from_numpy(np.stack(videos)).to(args.device))
         with torch.inference_mode():
             output = model(tensor).mean(dim=-1).detach().cpu().numpy()
         validate_activations(output,len(chunk))
@@ -241,6 +241,8 @@ def load_rows(args):
 
 
 def load_model(args):
+    from swapface_benchmark.runtime_limits import configure_cpu_runtime
+    configure_cpu_runtime()
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
     sys.path.insert(0,str(Path(args.i3d_root).resolve()))

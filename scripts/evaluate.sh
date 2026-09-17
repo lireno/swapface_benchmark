@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Set BLAS/OpenMP before Python imports. ONNX pools are separately bounded via
+# SessionOptions in runtime_limits.py; OMP alone does not constrain ONNX.
+export OMP_NUM_THREADS="${BENCHMARK_TORCH_THREADS:-2}" MKL_NUM_THREADS="${BENCHMARK_TORCH_THREADS:-2}"
+export OPENBLAS_NUM_THREADS="${BENCHMARK_BLAS_THREADS:-2}" NUMEXPR_NUM_THREADS="${BENCHMARK_BLAS_THREADS:-2}"
+export OMP_WAIT_POLICY=PASSIVE KMP_BLOCKTIME=0
+export OPENCV_FFMPEG_THREADS="${BENCHMARK_DECODE_THREADS:-2}"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_ASSETS_ROOT="${DEFAULT_ASSETS_ROOT:-$ROOT/assets}"
 DEFAULT_ORIGIN_DIR="${DEFAULT_ORIGIN_DIR:-}"

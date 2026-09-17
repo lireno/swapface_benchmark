@@ -68,17 +68,17 @@ def load_dino(repo: Path, weights: Path, device: torch.device) -> torch.nn.Modul
     return model.eval().to(device)
 
 
-def dino_preprocess(frames: list[np.ndarray]) -> torch.Tensor:
+def dino_preprocess(frames: list[np.ndarray], device='cpu') -> torch.Tensor:
     # VBench dino_transform(224): RGB, Resize(short side=224), ImageNet normalization.
     tensors = [torch.from_numpy(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).permute(2, 0, 1) for frame in frames]
-    batch = torch.stack(tensors).float() / 255.0
+    batch = torch.stack(tensors).to(device).float() / 255.0
     batch = TVF.resize(batch, 224, antialias=False)
     return TVF.normalize(batch, (0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
 
 
-def musiq_preprocess(frames: list[np.ndarray]) -> torch.Tensor:
+def musiq_preprocess(frames: list[np.ndarray], device='cpu') -> torch.Tensor:
     tensors = [torch.from_numpy(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).permute(2, 0, 1) for frame in frames]
-    batch = torch.stack(tensors).float()
+    batch = torch.stack(tensors).to(device).float()
     _, _, height, width = batch.shape
     if max(height, width) > 512:
         scale = 512.0 / max(height, width)
@@ -103,6 +103,7 @@ def evaluate_video(
     pair_count = 0
     flicker_sum = 0.0
     previous_frame: np.ndarray | None = None
+    previous_pixels: torch.Tensor | None = None
     first_feature: torch.Tensor | None = None
     previous_feature: torch.Tensor | None = None
     subject_sum = 0.0
@@ -115,10 +116,10 @@ def evaluate_video(
             return
         with torch.inference_mode():
             if musiq is not None:
-                output = musiq(musiq_preprocess(pending).to(device))
+                output = musiq(musiq_preprocess(pending, device))
                 musiq_scores.extend(output.detach().float().reshape(-1).cpu().tolist())
             if dino is not None:
-                features = F.normalize(dino(dino_preprocess(pending).to(device)), dim=-1, p=2).detach()
+                features = F.normalize(dino(dino_preprocess(pending, device)), dim=-1, p=2).detach()
                 for feature in features:
                     feature = feature.unsqueeze(0)
                     if first_feature is None:
@@ -144,9 +145,12 @@ def evaluate_video(
             if frame_count and frame.shape != previous_frame.shape:
                 raise RuntimeError(f"frame shape changed at frame {source_frame_index}")
             sampled_frame_indices.append(source_frame_index)
-            if "temporal_flickering" in selected and previous_frame is not None:
-                flicker_sum += float(np.mean(cv2.absdiff(previous_frame.astype(np.float32), frame.astype(np.float32))))
-                pair_count += 1
+            if "temporal_flickering" in selected:
+                pixels = torch.from_numpy(frame).to(device).float()
+                if previous_pixels is not None:
+                    flicker_sum += (previous_pixels - pixels).abs().mean().item()
+                    pair_count += 1
+                previous_pixels = pixels
             previous_frame = frame
             pending.append(frame)
             frame_count += 1
@@ -181,6 +185,8 @@ def evaluate_video(
 
 
 def main() -> int:
+    from swapface_benchmark.runtime_limits import configure_cpu_runtime
+    configure_cpu_runtime()
     parser = argparse.ArgumentParser()
     parser.add_argument("--mapping", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

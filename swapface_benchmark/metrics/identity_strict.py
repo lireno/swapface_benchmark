@@ -225,6 +225,8 @@ def crop_face(frame: np.ndarray, bbox: tuple[int, int, int, int] | None) -> np.n
 
 class StrictInsightFace:
     def __init__(self, models_dir: Path, ctx_id: int, det_size: int, det_thresh: float) -> None:
+        from swapface_benchmark.runtime_limits import configure_cpu_runtime
+        configure_cpu_runtime()
         import onnxruntime as ort
         from insightface.model_zoo.arcface_onnx import ArcFaceONNX
         from insightface.model_zoo.scrfd import SCRFD
@@ -236,8 +238,9 @@ class StrictInsightFace:
         providers = ["CPUExecutionProvider"]
         if ctx_id >= 0:
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        det_session = ort.InferenceSession(det_path.as_posix(), providers=providers)
-        rec_session = ort.InferenceSession(rec_path.as_posix(), providers=providers)
+        from swapface_benchmark.runtime_limits import ort_session_options
+        det_session = ort.InferenceSession(det_path.as_posix(), sess_options=ort_session_options(), providers=providers)
+        rec_session = ort.InferenceSession(rec_path.as_posix(), sess_options=ort_session_options(), providers=providers)
         self.det_model = SCRFD(model_file=det_path.as_posix(), session=det_session)
         self.rec_model = ArcFaceONNX(model_file=rec_path.as_posix(), session=rec_session)
         self.det_thresh = det_thresh
@@ -250,6 +253,10 @@ class StrictInsightFace:
             or "CUDAExecutionProvider" not in self.rec_model.session.get_providers()
         ):
             raise RuntimeError("CUDAExecutionProvider requested but InsightFace models are running without CUDA")
+        if ctx_id >= 0:
+            from swapface_benchmark.runtime_limits import require_ort_cuda
+            require_ort_cuda(self.det_model.session)
+            require_ort_cuda(self.rec_model.session)
 
     def recognize(self, image_bgr: np.ndarray, kps: np.ndarray) -> np.ndarray:
         if hasattr(self.rec_model, "get"):

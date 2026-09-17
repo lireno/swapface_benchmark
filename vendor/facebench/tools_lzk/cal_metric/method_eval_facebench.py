@@ -24,6 +24,7 @@ import torchvision.transforms.functional as TFF
 
 from eval_tools.metrics_calculator_facebench import MetricsCalculator
 from swapface_benchmark.roi import read_face_boxes, scaled_box
+from swapface_benchmark.runtime_limits import positive_env
 
 DECODE_THREADS = max(1, int(os.environ.get('BENCHMARK_DECODE_THREADS', '2')))
 
@@ -495,7 +496,7 @@ class ComprehensiveEvaluator:
             torch.cuda.set_device(0)  # 绑定到本地0号
             self.device = torch.device("cuda:0")
         else:
-            self.device = torch.device("cpu")
+            raise RuntimeError('GPU FaceBench actor cannot access CUDA; refusing CPU fallback')
         print("[Actor Device] =", self.device)
         self.metrics_calculator = MetricsCalculator(device=self.device)
         
@@ -1567,9 +1568,11 @@ def main(config: EvalConfig):
             f"/tmp/swapface_ray_{os.getpid()}",
         )
         os.makedirs(ray_temp_dir, exist_ok=True)
+        actor_cpus = positive_env('BENCHMARK_ACTOR_CPUS', 2)
         ray.init(
             include_dashboard=False,
-            num_cpus=16,
+            num_cpus=actor_cpus * config.num_gpus,
+            object_store_memory=positive_env('BENCHMARK_RAY_OBJECT_STORE_MB', 512) * 1024**2,
             num_gpus=config.num_gpus,
             runtime_env={"env_vars": ENV_LIMITS},
             _temp_dir=ray_temp_dir,
@@ -1600,7 +1603,8 @@ def main(config: EvalConfig):
         # 创建远程评估器
         evaluators = []
         for i in range(config.num_gpus):
-            evaluator = ComprehensiveEvaluator.remote(config)
+            evaluator = ComprehensiveEvaluator.options(
+                num_cpus=positive_env('BENCHMARK_ACTOR_CPUS', 2)).remote(config)
             evaluators.append(evaluator)
         
         # 合并所有ref类型的视频数据
